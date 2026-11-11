@@ -1,0 +1,26 @@
+# api 和 worker 共用这个镜像，只是 command 不同
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# 先只拷依赖清单：改代码时这一层直接命中缓存
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+# 再拷代码
+COPY app ./app
+COPY migrations ./migrations
+COPY alembic.ini ./
+COPY scripts ./scripts
+
+# 非 root 运行
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

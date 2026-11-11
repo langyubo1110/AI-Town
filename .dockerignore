@@ -1,0 +1,25 @@
+# 这些不进构建上下文（不写会让 docker build 慢十倍）
+
+.git
+.idea
+.vscode
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+
+# 密钥：绝不进镜像
+.env
+.env.*
+!.env.example
+
+# 前端依赖与产物
+web/node_modules
+web/dist
+
+# 评测产物
+docs/eval/*.json
+
+# 其它
+*.log

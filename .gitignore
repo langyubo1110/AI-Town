@@ -1,0 +1,26 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# ---- 环境变量（含密钥，绝不提交）----
+.env
+.env.*
+!.env.example
+
+# ---- 前端 ----
+web/node_modules/
+web/dist/
+
+# ---- 评测产物 ----
+# docs/eval/*.json 保留入库：README 里引用的指标需要可追溯的原始结果。
+# 重新生成：python scripts/eval_memory.py / eval_tools.py / eval_dialogue.py
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,300 @@
+{
+  "generated_at": "2026-11-10T06:27:40.618321+00:00",
+  "npc": "张三",
+  "player": "工具评测",
+  "summary": {
+    "strict_cases": 14,
+    "boundary_cases": 3,
+    "accuracy": 1.0,
+    "miss_count": 0,
+    "miss_rate": 0.0,
+    "false_call_count": 0,
+    "false_call_rate": 0.0,
+    "boundary_ok": 3,
+    "multi_tool_turns": 0,
+    "reply_leaks": 0,
+    "latency_p50_ms": 3513,
+    "latency_max_ms": 5735
+  },
+  "records": [
+    {
+      "message": "现在几点了？",
+      "kind": "should_call",
+      "expect": [
+        "get_time"
+      ],
+      "actual": "get_time",
+      "calls": [
+        {
+          "name": "get_time",
+          "args": {}
+        }
+      ],
+      "ok": true,
+      "reply": "两点二十六，周二下午。正适合写代码的时段，我这边刚跑完一组测试。",
+      "leak": false,
+      "latency_ms": 5735
+    },
+    {
+      "message": "今天周几来着？",
+      "kind": "should_call",
+      "expect": [
+        "get_time"
+      ],
+      "actual": "get_time",
+      "calls": [
+        {
+          "name": "get_time",
+          "args": {}
+        }
+      ],
+      "ok": true,
+      "reply": "周二，下午两点二十六。刚不是说过一遍嘛，你该不会写代码写到时间错觉了吧。",
+      "leak": false,
+      "latency_ms": 3433
+    },
+    {
+      "message": "李四现在在哪？",
+      "kind": "should_call",
+      "expect": [
+        "get_town_status"
+      ],
+      "actual": "get_town_status",
+      "calls": [
+        {
+          "name": "get_town_status",
+          "args": {
+            "npc_name": "李四"
+          }
+        }
+      ],
+      "ok": true,
+      "reply": "李四在会议室呢，估计又在跟人扯需求了。要我把他叫过来吗？",
+      "leak": false,
+      "latency_ms": 3234
+    },
+    {
+      "message": "王五在忙什么呢？",
+      "kind": "should_call",
+      "expect": [
+        "get_town_status"
+      ],
+      "actual": "get_town_status",
+      "calls": [
+        {
+          "name": "get_town_status",
+          "args": {
+            "npc_name": "王五"
+          }
+        }
+      ],
+      "ok": true,
+      "reply": "王五在休息区呢，估计又在摸鱼喝咖啡。我刚调完一个并发bug，正好也想歇会儿。",
+      "leak": false,
+      "latency_ms": 3582
+    },
+    {
+      "message": "你还记得我不吃什么吗？",
+      "kind": "should_call",
+      "expect": [
+        "search_memories"
+      ],
+      "actual": "search_memories",
+      "calls": [
+        {
+          "name": "search_memories",
+          "args": {
+            "query": "不吃 忌口 食物"
+          }
+        }
+      ],
+      "ok": true,
+      "reply": "翻了下记忆，好像没存过你的忌口记录——我这边只有你问时间、问李四王五的聊天。你再说一遍，我记牢，下次点外卖绝不踩雷。",
+      "leak": false,
+      "latency_ms": 4136
+    },
+    {
+      "message": "我上次跟你说的那个副业项目叫什么？",
+      "kind": "should_call",
+      "expect": [
+        "search_memories"
+      ],
+      "actual": "search_memories",
+      "calls": [
+        {
+          "name": "search_memories",
+          "args": {
+            "query": "副业项目"
+          }
+        }
+      ],
+      "ok": true,
+      "reply": "翻遍了记忆，没找着——我这边只存了时间、李四王五那些杂问，副业项目一个字都没有。你再提一嘴，我这次直接记死。",
+      "leak": false,
+      "latency_ms": 4060
+    },
+    {
+      "message": "今天好累啊",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "累了就别硬撑，盯着屏幕太久眼睛都发涩。我这边也刚把测试跑完，要不要一起去休息区透透气？",
+      "leak": false,
+      "latency_ms": 3039
+    },
+    {
+      "message": "哈哈哈你好搞笑",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "搞笑？我这叫严谨，每个字都跑过单元测试的。倒是你，笑完接着写代码吧。",
+      "leak": false,
+      "latency_ms": 2665
+    },
+    {
+      "message": "谢谢你啊",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "客气啥，顺手的事。你要是真谢我，下次点外卖记得带我一份——别又是香菜那种坑。",
+      "leak": false,
+      "latency_ms": 2925
+    },
+    {
+      "message": "你觉得我该不该辞职？",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "辞职这事我不能替你拍板，但副业项目既然已经起了个头，先跑通再谈退路更稳。别一冲动裸辞，现金流断了比 bug 难修。",
+      "leak": false,
+      "latency_ms": 3822
+    },
+    {
+      "message": "1+1 等于几？",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "二。这种题连单元测试都不用跑。你要是想拿它测我，建议加点难度，比如多线程下自增还安不安全。",
+      "leak": false,
+      "latency_ms": 3511
+    },
+    {
+      "message": "你是什么性格的人？",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "典型技术宅一个，话不多，开口就爱扯架构和算法，碰上 bug 能吐槽半天。说白了，严谨到有点轴，你习惯就好。",
+      "leak": false,
+      "latency_ms": 2781
+    },
+    {
+      "message": "中午吃点什么好呢",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "别点带香菜的就行，你上次那坑我还记着呢。楼下那家牛肉面还行，要不去试试？我这边代码跑完就下楼。",
+      "leak": false,
+      "latency_ms": 4325
+    },
+    {
+      "message": "我好烦，不想上班了",
+      "kind": "should_not_call",
+      "expect": [
+        "none"
+      ],
+      "actual": "none",
+      "calls": [],
+      "ok": true,
+      "reply": "又卡在同样的破事上了？我这边测试也刚炸了一轮，烦归烦，先别急着拍桌。说说具体烦哪儿了，是需求改来改去还是人不对付？",
+      "leak": false,
+      "latency_ms": 4041
+    },
+    {
+      "message": "这个点你还在公司？",
+      "kind": "boundary",
+      "expect": [
+        "get_time",
+        "none"
+      ],
+      "actual": "get_time",
+      "calls": [
+        {
+          "name": "get_time",
+          "args": {}
+        }
+      ],
+      "ok": true,
+      "reply": "下午两点半，周二，正是干活的时候啊。我这边刚好调试完一轮，在工位区。你问这个，是不是想找时间开溜？",
+      "leak": false,
+      "latency_ms": 3354
+    },
+    {
+      "message": "大家现在都在忙什么？",
+      "kind": "boundary",
+      "expect": [
+        "get_town_status",
+        "none"
+      ],
+      "actual": "get_town_status",
+      "calls": [
+        {
+          "name": "get_town_status",
+          "args": {}
+        }
+      ],
+      "ok": true,
+      "reply": "李四在会议室开会，估计又在跟需求较劲；王五在休息区摸鱼喝咖啡。我这边在工位区改代码，正好也想歇口气。",
+      "leak": false,
+      "latency_ms": 3639
+    },
+    {
+      "message": "你还记得我们第一次见面吗？",
+      "kind": "boundary",
+      "expect": [
+        "search_memories",
+        "none"
+      ],
+      "actual": "search_memories",
+      "calls": [
+        {
+          "name": "search_memories",
+          "args": {
+            "query": "第一次见面"
+          }
+        }
+      ],
+      "ok": true,
+      "reply": "翻了记忆库，没找到第一次见面的条目，估计那时还没开始记。你提一嘴？我这次直接标个索引存死。",
+      "leak": false,
+      "latency_ms": 3513
+    }
+  ]
+}

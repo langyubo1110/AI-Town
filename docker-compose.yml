@@ -1,0 +1,43 @@
+#Docker：把应用和依赖打包成容器运行
+#用一个 YAML 文件描述多个容器 docker compose up 一条命令全部启动
+#Postgres / Redis 这类基础设施用容器跑，环境一致、不污染本机、删了重来很方便
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aitown-postgres
+    environment:
+      POSTGRES_USER: aitown
+      POSTGRES_PASSWORD: aitown
+      POSTGRES_DB: aitown
+    ports:
+      #左边是宿主机端口，右边是容器内端口
+      - "5432:5432"
+    #命名卷，容器删除后数据还在
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    #让 Compose 能判断"容器是起来了"还是"服务真能用了"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aitown -d aitown"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: aitown-redis
+    #开启 AOF 持久化，否则重启丢数据
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+#定义两个"命名卷"，并告诉 Docker"我要用这两个卷来持久化数据"。
+volumes:
+  pgdata:
+  redisdata:
