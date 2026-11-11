@@ -1,10 +1,8 @@
 """小镇事件：让 NPC 之间互动（异步），以及查看 NPC 的今日计划。"""
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import plans
 from app.api.deps import get_redis, get_session
@@ -15,6 +13,7 @@ from app.api.schemas.town import (
     PlanListOut,
     PlanStepOut,
 )
+from app.core.clock import local_now
 from app.domain import plans as plan_rules
 from app.models import Player
 from app.repos import npc_repo
@@ -67,7 +66,7 @@ async def list_plans(
     redis: Redis = Depends(get_redis),
 ) -> PlanListOut:
     """只读接口：计划由 worker 的 ticker 懒生成，这里不触发写入。"""
-    now = datetime.now()
+    now = local_now()
     npcs = await npc_repo.list_active(session)
 
     items: list[NpcPlanOut] = []

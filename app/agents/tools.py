@@ -13,16 +13,15 @@
    并且要截断 —— 一条工具结果不该把 prompt 撑爆。
 """
 
-from datetime import datetime
-
 from langchain_core.tools import tool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.clock import local_now
 from app.core.logging import get_logger
 from app.domain import affinity_rules
 from app.memory import episodic
-from app.models import Affinity, NPC
+from app.models import NPC, Affinity
 
 log = get_logger(__name__)
 
@@ -74,7 +73,7 @@ def build_tools(session: AsyncSession, *, npc_id: int, player_id: int) -> list:
         当玩家问到现在几点、今天周几、是不是该下班了、外面天黑了没有这类话题时使用。
         闲聊、情绪表达、和具体时间无关的问题不要调用。
         """
-        now = datetime.now()
+        now = local_now()
         weekday = WEEKDAYS[now.weekday()]
         period = _period_of_day(now.hour)
         return _clip(f"{now:%Y-%m-%d %H:%M} {weekday}，现在是{period}")

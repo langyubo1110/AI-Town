@@ -518,7 +518,7 @@ cd web && npm run dev         # http://localhost:5173
 ### 生产模式（一条命令）
 
 ```bash
-cp .env .env.prod             # 把 localhost 改成服务名
+cp .env .env.prod             # 把 localhost 改成服务名（postgres / redis）
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec api python -m scripts.seed
 # http://localhost:8080
@@ -526,6 +526,29 @@ docker compose -f docker-compose.prod.yml exec api python -m scripts.seed
 
 > api 只 `expose` 不 `ports`，所以 `localhost:8000` 打不通是正常的 ——
 > 请求必须走 `8080 → nginx → api:8000`。**uvicorn 跑在容器里，由 compose 托管。**
+
+**这套栈是实跑验证过的**（2026-11-11），逐项确认：
+
+| 检查 | 结果 |
+|---|---|
+| `GET /` | 200，返回 SPA |
+| `GET /api/npcs` | 200，3 个 NPC |
+| `GET /health` | 200 `{"status":"ok",...,"checks":{"postgres":"ok","redis":"ok"}}` |
+| `GET /api/town/plans` | 200，计划从**本地时间**起算 |
+| `WS /ws/events` | 握手 101，能收到实时 `npc_dialogue` 事件 |
+| `python -m app.worker` | ticker 每 20 秒推进，`plan_generated` / `npc_dialogue_done` 正常 |
+
+#### 实跑之后修掉的三个问题（只有真部署才会暴露）
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `GET /health` 返回 **200 + HTML** | `/health` 不在 `/api/` 下，落到 `try_files → index.html`，探针会误判"服务正常" | nginx 加 `location = /health` 显式反代 |
+| 2 | 首次部署后 **小镇一动不动** | 生成计划前先找"观察者玩家"，库里没玩家就直接 `return`，计划和玩家本来就无关 | 解耦：位置和计划照常推进，只有写事件台账才需要玩家 |
+| 3 | 计划全 `pending`，**一步都不执行** | 容器是 **UTC**，计划是本地时间（09:15 vs 03:15），`due_step()` 永远"没到点" | 新增 `app/core/clock.local_now()` + `APP_TIMEZONE`，业务时间一律走本地时区 |
+
+> 第 3 条最值得记住：开发机（+08）上 `datetime.now()` 恰好等于本地时间，
+> **一进容器就差 8 小时**。这类 bug 单测抓不到、本地复现不了，只有 `docker compose up` 才能看见。
+> 现在 `scripts/seed.py` 还会建一个「小镇」系统玩家，作为"还没人打开页面"时的事件归属者。
 
 ---
 

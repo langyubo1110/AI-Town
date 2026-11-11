@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app.agents import plans
+from app.core.clock import local_now
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.domain import plans as plan_rules
@@ -89,8 +90,6 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
             return False
 
         player_id = await _observer_player_id(session)
-        if player_id is None:
-            return False
 
         for npc in npcs:
             try:
@@ -123,21 +122,32 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
             # ★ 真的把 NPC 挪到计划里的房间（前端 setNpcs 按 location 摆位置）
             npc.location = step["room"]
 
-            created = await event_repo.create(
-                session,
-                player_id=player_id,
-                npc_id=npc.id,
-                event_type=PLAN_EVENT,
-                summary=f"{npc.name}去{step['room']}{step['goal']}",
-                payload={
-                    "npc_name": npc.name,
-                    "at": step["at"],
-                    "goal": step["goal"],
-                    "room": step["room"],
-                    "trigger": "plan",
-                },
-            )
-            await session.flush()
+            created = None
+            if player_id is not None:
+                created = await event_repo.create(
+                    session,
+                    player_id=player_id,
+                    npc_id=npc.id,
+                    event_type=PLAN_EVENT,
+                    summary=f"{npc.name}去{step['room']}{step['goal']}",
+                    payload={
+                        "npc_name": npc.name,
+                        "at": step["at"],
+                        "goal": step["goal"],
+                        "room": step["room"],
+                        "trigger": "plan",
+                    },
+                )
+                await session.flush()
+            else:
+                # 没有玩家就没有事件归属者（events.player_id 是 NOT NULL），
+                # 但位置和计划照常推进 —— 页面靠 /api/town/plans 轮询也能看到。
+                # 这个分支在"首次部署、还没人打开过页面"时一定会走到。
+                log.warning(
+                    "plan_step_without_player",
+                    npc=npc.name,
+                    hint="库里还没有玩家，先跑 python -m scripts.seed",
+                )
 
             # 先落库，再更新计划里的状态，保存到对应的redis里面
             await plans.save_plan(
@@ -149,25 +159,26 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
             await session.commit()
 
             # commit 之后才推（和 worker 里同一条规矩：推出去的库里一定查得到）
-            await publish_event(
-                redis,
-                player_id=player_id,
-                event={
-                    "id": created.id,
-                    "event_type": created.event_type,
-                    "npc_id": created.npc_id,
-                    "summary": created.summary,
-                    "payload": created.payload,
-                    "created_at": datetime.now(UTC).isoformat(),
-                },
-            )
+            if created is not None:
+                await publish_event(
+                    redis,
+                    player_id=player_id,
+                    event={
+                        "id": created.id,
+                        "event_type": created.event_type,
+                        "npc_id": created.npc_id,
+                        "summary": created.summary,
+                        "payload": created.payload,
+                        "created_at": datetime.now(UTC).isoformat(),
+                    },
+                )
             log.info(
                 "plan_step_done",
                 npc=npc.name,
                 at=step["at"],
                 goal=step["goal"],
                 room=step["room"],
-                event_id=created.id,
+                event_id=created.id if created is not None else None,
             )
             return True
 
@@ -177,7 +188,7 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
 async def tick_once(redis: Redis, session_factory) -> None:
     """一轮 tick：加锁 → 背压 → 优先推进计划 → 否则自由闲聊。"""
     settings = get_settings()
-    now = datetime.now()
+    now = local_now()
 
     # 1) 分布式锁：同一时刻只允许一个 worker 触发
     #    TTL 略小于 tick 间隔，保证下一轮一定能拿到
@@ -207,7 +218,12 @@ async def tick_once(redis: Redis, session_factory) -> None:
     # 4) 没有到点的计划 → 自由活动（原有的随机闲聊）
     picked = await _pick_participants(session_factory)
     if picked is None:
-        log.debug("tick_skipped", reason="not_enough_data")
+        # 这条原来是 debug，结果"首次部署后小镇一动不动"完全不可见。提到 info。
+        log.info(
+            "tick_skipped",
+            reason="not_enough_data",
+            hint="需要 2 个以上 NPC 和 1 个玩家（python -m scripts.seed）",
+        )
         return
     npc_a, npc_b, player_id = picked
     topic = random.choice(TOPICS)

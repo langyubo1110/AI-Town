@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     npc_tick_seconds: int = 60         # 每 60 秒触发一次
     npc_tick_max_backlog: int = 20     # 队列积压超过这个数就不再投递
 
+    # ---- 时区 ----
+    # 容器默认是 UTC，而"日程"是给人看的本地时间。不显式指定的话，
+    # 计划写着 09:15，容器的 now 却是 03:15 —— 一整天都不会有一步到点。
+    app_timezone: str = "Asia/Shanghai"
+
     # ---- 可观测（Langfuse）：两个 key 都不填就自动关闭 ----
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
