@@ -564,4 +564,4 @@ python -m scripts.make_diagrams         # 重新生成 README 配图
 
 ## 十一、License / 素材
 
-代码用于学习与面试展示。美术资源来自 chapter15 配套素材包（itch.io 风格，**商用前需回原作者页面确认许可**）。
+代码用于学习与面试展示。
