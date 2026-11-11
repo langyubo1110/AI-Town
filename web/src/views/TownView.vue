@@ -1,17 +1,27 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import TownCanvas from '@/components/TownCanvas.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
 import EventFeed from '@/components/EventFeed.vue'
+import PlanBoard from '@/components/PlanBoard.vue'
 import { fetchNpcs } from '@/api/npc'
+import { fetchPlans } from '@/api/town'
 import { ApiError } from '@/api/http'
-import type { ChatOut, Npc } from '@/types/api'
+import type { ChatOut, Npc, NpcPlan, TownEvent } from '@/types/api'
 
 const STORAGE_KEY = 'aitown.playerName'
 
+/** WebSocket 没连上时的兜底刷新间隔。
+ *  为什么需要：playerId 只有聊过一次天才拿得到，在那之前 WS 连不上，
+ *  而"打开页面就能看到小镇自己动"是演示的第一印象。
+ */
+const POLL_MS = 30_000
+
 const npcs = ref<Npc[]>([])
+const plans = ref<NpcPlan[]>([])
 const loading = ref(true)
 const error = ref('')
+const plansLoading = ref(false)
 const selected = ref<Npc | null>(null)
 const playerName = ref(localStorage.getItem(STORAGE_KEY) || '小明')
 const playerId = ref<number | null>(null)
@@ -22,28 +32,80 @@ watch(playerName, (name) => {
   playerId.value = null
 })
 
-async function load() {
-  loading.value = true
-  error.value = ''
+/** 位置没变就不替换数组：TownCanvas 的 watch 会重建全部精灵，
+ *  每 30 秒重建一次画面会闪。
+ */
+function sameLocations(a: Npc[], b: Npc[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((npc, i) => npc.id === b[i].id && npc.location === b[i].location)
+}
+
+/** silent=true：后台刷新，不闪 loading、不覆盖已有报错 */
+async function loadNpcs(silent = false) {
+  if (!silent) {
+    loading.value = true
+    error.value = ''
+  }
   try {
     const data = await fetchNpcs()
+    if (silent && sameLocations(npcs.value, data.items)) return
     npcs.value = data.items
   } catch (err) {
-    error.value =
-      err instanceof ApiError
-        ? `加载失败（${err.status}）：${err.message}`
-        : '加载失败：未知错误'
+    if (!silent) {
+      error.value =
+        err instanceof ApiError
+          ? `加载失败（${err.status}）：${err.message}`
+          : '加载失败：未知错误'
+    }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
+  }
+}
+
+async function loadPlans() {
+  plansLoading.value = true
+  try {
+    const data = await fetchPlans()
+    plans.value = data.items
+  } catch {
+    // 计划面板失败不该影响主流程：静默，等下一次轮询
+  } finally {
+    plansLoading.value = false
+  }
+}
+
+/** 实时事件 → 按需刷新。plan_step 意味着有人换了房间、计划状态也变了 */
+function onTownEvent(event: TownEvent) {
+  if (event.event_type === 'plan_step') {
+    loadPlans()
+    loadNpcs(true)
   }
 }
 
 function onChatted(result: ChatOut) {
   // 第一次聊天后才知道自己在数据库里的 id（后端 get_or_create 出来的）
   playerId.value = result.player_id
+  loadPlans()
 }
 
-onMounted(load)
+/** 点计划卡片 → 选中这个 NPC，右侧面板就变成和他的对话 */
+function onPlanSelect(npcId: number) {
+  const npc = npcs.value.find((item) => item.id === npcId)
+  if (npc) selected.value = npc
+}
+
+let pollTimer: ReturnType<typeof setInterval> | undefined
+
+onMounted(async () => {
+  await loadNpcs()
+  loadPlans()
+  pollTimer = setInterval(() => {
+    loadPlans()
+    loadNpcs(true)
+  }, POLL_MS)
+})
+
+onBeforeUnmount(() => clearInterval(pollTimer))
 </script>
 
 <template>
@@ -62,7 +124,7 @@ onMounted(load)
     <p v-if="loading" class="hint">加载中…</p>
     <div v-else-if="error" class="error">
       <p>{{ error }}</p>
-      <button @click="load">重试</button>
+      <button @click="loadNpcs()">重试</button>
     </div>
 
     <template v-else>
@@ -72,9 +134,16 @@ onMounted(load)
         @request-chat="(npc) => (selected = npc)"
       />
 
+      <PlanBoard
+        :plans="plans"
+        :loading="plansLoading"
+        :selected-id="selected?.id ?? null"
+        @select="onPlanSelect"
+      />
+
       <div class="panels">
         <ChatPanel :npc="selected" :player-name="playerName" @chatted="onChatted" />
-        <EventFeed :player-id="playerId" />
+        <EventFeed :player-id="playerId" @event="onTownEvent" />
       </div>
     </template>
   </main>

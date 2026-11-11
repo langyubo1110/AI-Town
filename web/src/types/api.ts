@@ -63,3 +63,26 @@ export interface EventListOut {
   items: TownEvent[]
   next_before_id: number | null
 }
+
+/** 今日计划（对应 app/api/schemas/town.py） */
+export interface PlanStep {
+  /** 计划时刻，HH:MM（不是 ISO 时间戳） */
+  at: string
+  goal: string
+  room: string
+  /** done / missed 是 ticker 推进后改的，pending 是还没到点 */
+  status: 'pending' | 'done' | 'missed'
+}
+
+export interface NpcPlan {
+  npc_id: number
+  npc_name: string
+  done: number
+  total: number
+  steps: PlanStep[]
+}
+
+export interface PlanListOut {
+  date: string
+  items: NpcPlan[]
+}

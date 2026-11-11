@@ -7,6 +7,11 @@ import type { TownEvent } from '@/types/api'
 
 const props = defineProps<{ playerId: number | null }>()
 
+/** 把实时事件透给父组件：收到 plan_step 说明有 NPC 换了房间，
+ *  父组件要重新拉 NPC 位置和今日计划 —— 事件流自己不会驱动画面。
+ */
+const emit = defineEmits<{ event: [event: TownEvent] }>()
+
 const events = ref<TownEvent[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -20,6 +25,7 @@ const { status } = useEventStream(toRef(props, 'playerId'), (raw) => {
   if (typeof incoming?.id !== 'number') return
   if (events.value.some((item) => item.id === incoming.id)) return // 去重：推送和轮询可能同时到达
   events.value = [incoming, ...events.value].slice(0, 50)
+  emit('event', incoming)
 })
 
 const dotClass = computed(() => status.value)
