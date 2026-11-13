@@ -11,13 +11,18 @@
 |---|---|---|
 | 玩家可控移动（WASD）+ 相机跟随 + 像素动画 | ✅ | 游戏循环、坐标系、渲染分层 |
 | 走近按 E 对话，LLM 按人设回复 | ✅ | Prompt 工程、降级策略 |
-| **工具调用（ReAct 循环）**：查时间 / 查小镇 / 翻记忆 | ✅ | Function Calling、状态机循环、防死循环 |
+| **工具调用（ReAct 循环）**：查时间 / 查小镇 / 翻记忆 / **查文档** | ✅ | Function Calling、状态机循环、防死循环 |
 | **两级记忆**：Redis 工作记忆 + pgvector 长期记忆 | ✅ | 短期/长期记忆、TTL、向量存储 |
 | **两段式检索 + 三因子重排** | ✅ | RAG、召回与重排分离、消融实验 |
+| **文档 RAG**：切块 + 向量/BM25 双路召回 + RRF 融合 + 引用出处 | ✅ | chunking、hybrid retrieval、RRF、citation |
 | **NPC 日计划**：按"现在"算窗口、到点执行、自动换房间、页面可见 | ✅ | Planning、状态生命周期、过期处理 |
+| **目标分解**：NPC 带周目标，每日计划为目标服务 | ✅ | goal decomposition、prompt 约束 |
+| **反思（Reflection）**：把经历沉淀成判断，写回记忆并影响次日计划 | ✅ | Generative Agents 三件套、抽象而非复述 |
+| **重规划（Replan）**：过期不丢弃，重排进剩余时间 | ✅ | replan、LLM 建议 + 系统校验 + 确定性兜底 |
 | 好感度五档 + 跨档触发事件 | ✅ | 领域规则、事件台账 |
 | 异步任务：Redis Stream + 消费组 + ACK | ✅ | 至少一次语义、崩溃恢复、背压 |
 | 事件流实时推送（WebSocket，轮询降级） | ✅ | 长连接、Pub/Sub、推拉结合 |
+| **流式输出（SSE）**：首字 1.3~2.5s，整轮 3.1~5.1s | ✅ | 流式协议、`astream_events`、反代缓冲 |
 | 可观测：Langfuse 链路追踪（可选开关） | ✅ | trace / session / 成本 |
 | 评测：检索消融 + 工具选择 + LLM-as-judge + 延迟 | ✅ | 指标设计、可复现性 |
 | 一键部署：Docker Compose + Nginx（含 WS 反代） | ✅ | 多阶段构建、反代、健康检查 |
@@ -33,8 +38,12 @@
 | NPC 怎么会「查东西」 | [2.2 工具调用](#22-工具调用react-循环) | ✅ 链路图 |
 | 记忆怎么存、怎么取 | [2.3 两级记忆与 RAG](#23-两级记忆与-rag) | ✅ 记忆图 |
 | NPC 怎么会「自己安排事情」 | [2.4 Planning](#24-planning-当日的计划) | — |
+| NPC 会不会「记得昨天」 | [2.4 反思](#反思让计划记得昨天) | — |
+| 计划过期了怎么办 | [2.4 重规划](#重规划过期不丢弃) | — |
 | 慢任务怎么不阻塞请求 | [2.5 异步任务](#25-异步任务stream) | ✅ 异步图 |
 | 消息怎么实时到浏览器 | [2.6 实时推送](#26-实时推送websocket) | ✅ 时序图 |
+| 长文档怎么查、答案从哪来 | [2.7 文档 RAG](#27-文档-rag混合检索--引用) | — |
+| 为什么字是一个一个蹦出来的 | [2.8 流式输出](#28-流式输出sse) | — |
 | 表怎么设计 | [三、数据模型](#三数据模型) | ✅ ER 图 |
 | 用了哪些技术、为什么不用别的 | [四、技术栈](#四技术栈) | — |
 | 效果怎么衡量的 | [五、评测](#五评测) | — |
@@ -108,13 +117,14 @@ routes ──→ agents ──→ memory ──→ repos ──→ models
 
 ![对话链路](docs/images/chat-flow.svg)
 
-三个工具，都用闭包持有 `session / npc_id / player_id`：
+四个工具，都用闭包持有 `session / npc_id / player_id`：
 
 | 工具 | 数据来源 | 什么时候该调 |
 |---|---|---|
 | `get_time` | 系统时钟 | 问几点、周几、是不是该下班 |
 | `get_town_status` | `npcs` + `affinities` 表 | 问某人在哪、谁跟谁熟 |
 | `search_memories` | pgvector（复用 `episodic.recall`） | 提到"之前/上次/你还记得" |
+| `search_docs` | `document_chunks`（向量 + BM25 混合，见 2.7） | 问公司规范、流程、制度 |
 
 **四个设计决定**：
 
@@ -238,6 +248,52 @@ worker 推进某一步
 WebSocket 连不上（还没聊过天 → 拿不到 player_id）→ 30 秒轮询兜底
 ```
 
+#### 反思：让计划记得昨天
+
+```
+做完 2 步后触发一次（reflect_every_steps）
+  ├─ 取当天做成的 / 没做成的 / 最近的记忆（按 importance 挑 8 条）
+  ├─ LLM 产出 2~3 条**判断**（"我总在帮别人兜底"，不是"我 review 了 PR"）
+  └─ 以 memory_type="reflection"、importance=0.85 写回 memories
+        ↓ 次日生成计划时
+     ensure_plan → load_reflections → prompt 多一段【你最近的思考】
+```
+
+| 设计点 | 为什么 |
+|---|---|
+| **复用 `memories` 表**，不建新表 | 反思和记忆是同一种东西的不同抽象层；建表要迁移 + 第二套检索，收益为零 |
+| **反思不走对话检索** | `recall()` 按 `(npc_id, player_id)` 过滤。反思存到某个玩家名下就只对那个人可见 → 等于没做。所以消费路径是**生成计划时按 npc_id 直查** |
+| 触发条件是"完成 2 步"而不是"日终" | 晚上 worker 常常不跑，而且演示时看不到；白天触发日志里直接有 `reflected` |
+| 幂等标记 `SET NX`，**失败在 `finally` 里还回去** | 先占坑再校验的写法，一次失败会锁死一整天（和"玩家卡住计划"同一类错误） |
+
+#### 重规划：过期不丢弃
+
+```
+旧：步骤超时 120 分钟 → 标 missed → 永远丢掉（宕机一次，今天少几件事）
+新：步骤超时 → 先 replan() → 重排进 [现在+10min, 下班] → 实在排不下才认丢
+```
+
+三层防御，缺一层都会出问题：
+
+| 层 | 做什么 | 不做会怎样 |
+|---|---|---|
+| LLM 建议 | 按"要紧程度"分配时间 | 冷冰冰均分，没有判断 |
+| 系统校验 | 数量 / 窗口 / 单调递增，不合格就作废 | 模型给出 25:00 或窗口外时间，计划直接烂掉 |
+| 确定性兜底 | `redistribute()` 均分 | 模型超时就什么都不做 → 退回"有计划但全过期" |
+
+> 只让模型改**时间**，不让它改**内容**——否则它会编出新任务，计划和目标就脱节。
+> 每个 NPC 每天最多重排 `replan_max_per_day=2` 次：一条永远做不完的步骤否则会被反复重排，变成烧钱机器。
+
+#### 周目标：计划有根
+
+`npcs.weekly_goal` 是这周要实现的事，生成计划时注入 prompt：
+
+```
+【你本周的目标】把多智能体调度模块上线，减少任务超时
+```
+
+不加这一段，模型只能凭空排时间表——排出来的事和这周要干什么没关系。
+
 ### 2.5 异步任务（Stream）
 
 ![异步与实时](docs/images/async-flow.svg)
@@ -297,6 +353,60 @@ done, _ = await asyncio.wait({pump, watch}, return_when=asyncio.FIRST_COMPLETED)
 - 拉取（`GET /api/events`）负责**不漏**，断线期间的事件重连后补齐
 - **两条路都必须有**：只有推送 → 断线丢数据；只有轮询 → 秒级延迟、空查数据库
 
+### 2.7 文档 RAG（混合检索 + 引用）
+
+```
+docs/kb/*.md
+  └─ chunk_text()           按段落切，400 字/块，相邻重叠 60 字
+       └─ aembed_documents()  批量向量化 → document_chunks 表
+```
+
+一次检索走三步：
+
+```
+query ─┬─ ① 向量召回 top40   （管"意思相近"）
+       └─ ② BM25  召回 top40  （管"字面对得上"）
+                 ↓
+           ③ RRF 融合 → top3 → 带 source 交给工具
+```
+
+| 设计点 | 为什么 |
+|---|---|
+| 按**段落**切，不按字数 | 段落是作者划的语义边界；按字数切会把一句话拦腰斩断，两个半句都不完整 |
+| 为什么不能只用向量 | 问"工号是多少"，向量可能召回一堆"关于张三"却没召回写着"工号：A1234"的段落——字面上"工号"才是关键 |
+| BM25 自己写，不用 PG 全文检索 | `tsvector` 默认词典不分中文（"研发规范"当成一个整体），要装 zhparser。几十个块在 Python 里算完全够，还能单测 |
+| 用 RRF，不用分数加权 | BM25 分数无界、余弦 0~1，量纲不同，加权要归一化、换批文档就得重调权重。RRF 只看名次 |
+| 两路**各自独立**召回 | 若只在向量召回的 40 条里做 BM25 微调，向量没召回的永远进不来，互补就废了 |
+
+**引用**：工具返回时把 `【文件名】` 一起给模型，于是回答会说"依据是《研发规范》"。
+
+### 2.8 流式输出（SSE）
+
+```
+POST /api/chat/stream      （EventSource 发不了 POST，所以是 fetch + ReadableStream）
+  data: {"type":"delta","text":"常"}     ← 逐字
+  data: {"type":"delta","text":"规"}
+  ...
+  data: {"type":"done", ...ChatOut}       ← 最后一条补元数据
+```
+
+| 设计点 | 为什么 |
+|---|---|
+| 只转发 `agent_step` 节点的 token | `analyze_turn` 也在调模型，不按节点过滤，好感度分析的文字会混进回复 |
+| 出现 `tool_call_chunks` 就不吐字 | 这一轮模型决定调工具，先吐字用户会看到"我查一下"然后话锋一转 |
+| 元数据放**最后一条** | 好感度是整轮结束才由 `analyze_turn` 算出来的，流式过程中还不存在 |
+| nginx 加 `proxy_buffering off` | 默认会攒满 buffer 再发，"流式"退化成"等 3 秒一次性吐完" |
+| 前端失败**自动降级** | 浏览器不支持流 / 代理缓冲 / 连接中断，都退回 `POST /api/chat` |
+
+**实测**（同机同模型）：
+
+| 场景 | 首字 | 整轮 |
+|---|---|---|
+| 普通闲聊（不调工具） | 1.3~2.5s | 3.1~5.1s |
+| 需要查知识库 | 首字更晚（要先跑一轮工具决策） | 更长 |
+
+用户感知的等待从"整轮"降到"首字"——这是流式真正的收益。
+
 ---
 
 ## 三、数据模型
@@ -326,11 +436,13 @@ done, _ = await asyncio.wait({pump, watch}, return_when=asyncio.FIRST_COMPLETED)
 | 层 | 技术 | 版本 | 职责 |
 |---|---|---|---|
 | 语言 | Python | 3.11 | 后端 |
-| Web | FastAPI + Uvicorn | 0.159.1 / 0.54.0 | REST + WebSocket |
+| Web | FastAPI + Uvicorn | 0.159.1 / 0.54.0 | REST + WebSocket + SSE |
 | 契约 | Pydantic v2 + pydantic-settings | 2.14.1 / 2.16.1 | 校验 + 配置 |
 | 数据 | PostgreSQL 16 + pgvector | `pgvector/pgvector:pg16` | 权威数据 + 向量 |
 | ORM | SQLAlchemy（async）+ asyncpg + Alembic | 2.1.6 / 0.32.0 / 1.20.0 | — |
 | 缓存 | Redis 7 + redis-py | 8.1.0 | List / Stream / Pub/Sub / 锁 |
+| 检索 | 自实现 BM25 + RRF | — | 字面召回 + 多路融合（见 2.7） |
+| 流式 | SSE（`text/event-stream`） | — | 逐字返回（见 2.8） |
 | 编排 | LangGraph | 1.2.16 | 对话状态机 |
 | 模型 | langchain-openai | 1.7.2 | OpenAI 兼容协议 |
 | 日志 | structlog | 26.1.0 | 结构化日志 |
@@ -348,6 +460,9 @@ done, _ = await asyncio.wait({pump, watch}, return_when=asyncio.FIRST_COMPLETED)
 | **SQLAlchemy** | `flush` 发 SQL 不提交、能拿到自增 id；`commit` 才认账。全图只 commit 一次 |
 | **Alembic** | `downgrade` 的 drop 顺序必须和 upgrade **相反**；autogenerate 会漏注释/部分索引/数据迁移 |
 | **pgvector** | `<=>` 是余弦距离（= 1 − 相似度）；数据量小不建 HNSW，建了反而吃内存且过滤时降召回 |
+| **BM25 / RRF** | BM25 补"字面对得上"，向量补"意思相近"；RRF 只用**名次**，所以免疫两路分数量纲不同。前提是两路**各自独立召回** |
+| **SSE** | `EventSource` 发不了 POST，得 `fetch + ReadableStream` 自己按 `\n\n` 切帧；nginx 必须 `proxy_buffering off`，否则退化成一次性返回 |
+| **astream_events** | 会抛所有节点的模型调用；必须按 `metadata.langgraph_node` 过滤，否则别的节点的 token 会混进回复 |
 | **Redis** | List 拿走即删（会丢）、Stream 有 pending + ACK（可恢复）、Pub/Sub 没人听就没了 |
 | **LangGraph** | state 要可序列化；节点返回**增量**不修改原 state；条件边要配映射表（拼错在编译期报错） |
 | **langchain-openai** | 阿里云 compatible-mode 不支持 `json_schema`，结构化输出要用 `method="function_calling"` |
@@ -482,8 +597,13 @@ done, _ = await asyncio.wait({pump, watch}, return_when=asyncio.FIRST_COMPLETED)
 | 计划窗口写死 09:00~18:00 | 下午启动时上午的步骤会被判 missed | ✅ 已修：按"现在 → 下班"生成窗口 |
 | 计划跑完后当天不再补 | 3~4 步做完就没日程了，下午会空窗 | 剩余时间 > 90 分钟时重新生成一份 |
 | 工具调用没有重试 | 失败只回填一次错误文本 | 区分可重试/不可重试，指数退避 |
-| 无文档知识库 RAG | 语料是对话记忆，不是长文档 | `documents` 表 + chunking + hybrid(BM25+向量) + citation |
-| 没有 Reflection | 记忆只累积不提炼，长期是流水账 | 日终把碎片压缩成 3 条洞察写回 |
+| 无文档知识库 RAG | 语料是对话记忆，不是长文档 | ✅ 已做：`document_chunks` + chunking + BM25/向量双路 + RRF + 引用 |
+| 没有 Reflection | 记忆只累积不提炼，长期是流水账 | ✅ 已做：完成 2 步后反思，写回 memories 并注入次日计划 |
+| 计划落下的步骤直接丢弃 | 宕机/重启后当天少几件事 | ✅ 已做：`replan()` 重排进剩余时间 |
+| 反思每天只触发一次 | 成本与复杂度折中 | 可按"记忆累积量"动态触发 |
+| 重排每天上限 2 次 | 防烧钱 | 按剩余窗口自适应 |
+| SSE 只用在对话 | worker 的事件推送仍走 WebSocket | 统一成一条 SSE 网关 |
+| BM25 是全内存实现 | 知识库只有几十个块 | 超过 1 万块换 PG 全文检索或 Elasticsearch |
 | 无真实碰撞 | 房间是装饰层，人物可走上去 | tilemap + 碰撞层 |
 | 对话历史只在前端内存 | 后端没有会话历史接口 | 加 `turns` 表 |
 | 无认证 | `player_id` 从 query 传，可伪造 | 握手校验 token |
@@ -503,7 +623,8 @@ done, _ = await asyncio.wait({pump, watch}, return_when=asyncio.FIRST_COMPLETED)
 docker compose up -d          # postgres(pgvector) + redis
 cp .env.example .env          # 填 LLM_API_KEY / EMBED_API_KEY
 alembic upgrade head
-python -m scripts.seed        # 灌 3 个 NPC
+python -m scripts.seed        # 灌 3 个 NPC + 1 个系统玩家（含周目标）
+python -m scripts.ingest_docs # 灌知识库（docs/kb/*.md → 切块 + 向量化）
 
 # 1. 后端
 uvicorn app.main:app --reload
@@ -594,13 +715,14 @@ ai-town/
 │   ├── domain/                 纯函数：affinity_rules / events / plans
 │   ├── repos/                  持久化（只做 CRUD）
 │   ├── memory/                 working(Redis) / episodic(pgvector) / ranking(三因子)
-│   ├── agents/                 state / runtime / prompts / nodes / graph / talk / tools / plans
+│   ├── rag/                    chunking / bm25 / fusion(RRF) / search(混合检索)
+│   ├── agents/                 state / runtime / prompts / nodes / graph / talk / tools / plans / reflection
 │   ├── api/                    deps / schemas / routes
 │   └── worker/                 streams / handlers / consumer / ticker
-├── migrations/                 Alembic（3 个版本）
-├── scripts/                    seed / try_* / probe_* / eval_* / make_diagrams
+├── migrations/                 Alembic（4 个版本）
+├── scripts/                    seed / ingest_docs / try_* / probe_* / eval_* / make_diagrams
 ├── data/eval/                  评测数据集
-├── docs/                       评测报告 + images/（SVG 配图）
+├── docs/                       评测报告 + images/（SVG 配图）+ kb/（知识库原文）
 ├── web/                        Vue3 + TS + Vite + PixiJS
 ├── deploy/nginx.conf
 ├── Dockerfile.api / Dockerfile.web

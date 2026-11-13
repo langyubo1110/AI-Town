@@ -203,3 +203,45 @@ def test_fallback_step_is_valid():
 
 def test_fallback_step_keeps_valid_room():
     assert rules.fallback_step(at="15:10", room="会议室")["room"] == "会议室"
+
+
+# ==================== 重排（redistribute） ====================
+
+
+def test_redistribute_spreads_over_window():
+    """3 步铺进 13:00~18:00（300 分钟）：每步隔 100 分钟。"""
+    steps = [_step("09:00", status="missed"), _step("10:00", status="missed"), _step("11:00")]
+    out = rules.redistribute(steps, start="13:00", end="18:00")
+    assert [s["at"] for s in out] == ["13:00", "14:40", "16:20"]
+
+
+def test_redistribute_resets_status_to_pending():
+    """过期的步骤被重新安排后，必须重新变成"待办"。"""
+    out = rules.redistribute([_step("09:00", status="missed")], start="13:00", end="18:00")
+    assert out[0]["status"] == "pending"
+
+
+def test_redistribute_does_not_mutate_input():
+    steps = [_step("09:00", status="missed")]
+    rules.redistribute(steps, start="13:00", end="18:00")
+    assert steps[0]["at"] == "09:00"
+    assert steps[0]["status"] == "missed"
+
+
+def test_redistribute_empty_returns_empty():
+    assert rules.redistribute([], start="13:00", end="18:00") == []
+
+
+def test_redistribute_never_leaves_the_window():
+    """10 步塞进 1 小时：结果仍必须全部落在窗口内。"""
+    steps = [_step("09:00") for _ in range(10)]
+    out = rules.redistribute(steps, start="13:00", end="14:00")
+    assert all("13:00" <= s["at"] <= "14:00" for s in out)
+
+
+def test_redistribute_keeps_goal_and_room():
+    out = rules.redistribute(
+        [_step("09:00", goal="写代码", room="会议室")], start="13:00", end="18:00"
+    )
+    assert out[0]["goal"] == "写代码"
+    assert out[0]["room"] == "会议室"

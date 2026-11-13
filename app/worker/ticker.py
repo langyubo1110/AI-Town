@@ -19,13 +19,14 @@ from datetime import UTC, datetime
 from redis.asyncio import Redis
 from sqlalchemy import select
 
-from app.agents import plans
+from app.agents import plans, reflection
 from app.core.clock import local_now
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.domain import plans as plan_rules
 from app.infra.broadcast import publish_event
-from app.models import Event, Player
+from app.memory import episodic
+from app.models import NPC, Event, Player
 from app.repos import event_repo, npc_repo
 from app.worker.streams import GROUP, STREAM, publish
 
@@ -82,8 +83,12 @@ async def _pick_participants(session_factory) -> tuple[str, str, int] | None:
         return npc_a.name, npc_b.name, player_id
 
 
-async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> bool:
-    """推进"最早到点"的那一步计划。返回是否真的推进了。"""
+async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> dict | None:
+    """推进"最早到点"的那一步计划。返回被推进的 NPC（dict）或 None。
+
+    为什么返回 dict 而不是 NPC 对象：commit 会让 ORM 属性过期，
+    带着对象出 session 再访问属性会抛 DetachedInstanceError。
+    """
     async with session_factory() as session:
         npcs = await npc_repo.list_active(session)
         if not npcs:
@@ -93,7 +98,7 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
 
         for npc in npcs:
             try:
-                steps = await plans.ensure_plan(redis, npc=npc, now=now)
+                steps = await plans.ensure_plan(redis, npc=npc, now=now, session=session)
             except Exception as exc:
                 log.warning(
                     "plan_ensure_failed",
@@ -108,6 +113,8 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
             steps, expired = plan_rules.expire_stale(steps, now)
             #存在过期的任务
             if expired:
+                # ★ 重规划：先试着把落下的重新安排进剩余时间，实在不行才认丢
+                steps = await _maybe_replan(redis, npc, steps, now)
                 await plans.save_plan(
                     redis, npc_id=npc.id, day=now.date(), steps=steps
                 )
@@ -172,6 +179,10 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
                         "created_at": datetime.now(UTC).isoformat(),
                     },
                 )
+            # 记一次"今天做成了几件事"，反思用它当触发器
+            done_key = f"aitown:plan_done:{npc.id}:{now.date()}"
+            await redis.incr(done_key)
+            await redis.expire(done_key, 26 * 3600)
             log.info(
                 "plan_step_done",
                 npc=npc.name,
@@ -180,9 +191,107 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> boo
                 room=step["room"],
                 event_id=created.id if created is not None else None,
             )
-            return True
+            return {"npc_id": npc.id, "npc_name": npc.name}
 
-    return False
+    return None
+
+
+async def _maybe_replan(redis: Redis, npc, steps: list[dict], now: datetime) -> list[dict]:
+    """把"还没做成"的步骤重新排进剩余时间。超每日上限就保持原样。
+
+    和旧行为的分水岭：
+        旧：过期 → 标 missed → 永远丢掉 —— 宕机一次，今天少几件事
+        新：过期 → 标 missed → 重新排到剩余时间 —— 事情还在，只是晚了
+
+    为什么要设每日上限（replan_max_per_day）：每次重排都要调一次 LLM，
+    如果计划里有一条永远做不完的步骤，它会被反复重排，变成烧钱机器。
+    """
+    unfinished = [step for step in steps if step.get("status") != "done"]
+    if not unfinished:
+        return steps
+
+    settings = get_settings()
+    key = f"aitown:replan:{npc.id}:{now.date()}"
+    # 先自增再判断：即使超限也把次数记上，避免并发时反复试探
+    used = await redis.incr(key)
+    await redis.expire(key, 26 * 3600)
+    if used > settings.replan_max_per_day:
+        log.info("replan_skipped", npc=npc.name, reason="daily_limit", used=used)
+        return steps
+
+    replanned = await plans.replan(npc=npc, steps=unfinished, now=now)
+    if not replanned:
+        return steps
+
+    done = [step for step in steps if step.get("status") == "done"]
+    # 已完成的步骤时间一定在过去，重排的都在未来，按时间合并即可保持有序
+    merged = sorted(done + replanned, key=lambda step: step["at"])
+    log.info(
+        "plan_replanned",
+        npc=npc.name,
+        count=len(replanned),
+        attempt=used,
+        times=[step["at"] for step in replanned],
+    )
+    return merged
+
+
+async def _maybe_reflect(
+    redis: Redis, session_factory, *, npc_id: int, npc_name: str, now: datetime
+) -> None:
+    """条件满足就做一次反思（当天最多一次）。
+
+    触发条件：今天已经做成 ≥ reflect_every_steps 件事。
+    为什么不"日终触发"：晚上 worker 常常不跑，而且演示时看不到效果。
+    """
+    settings = get_settings()
+    day = now.date()
+
+    done_key = f"aitown:plan_done:{npc_id}:{day}"
+    done_count = int(await redis.get(done_key) or 0)
+    if done_count < settings.reflect_every_steps:
+        return
+
+    # SET NX 做幂等：并发 tick 也只会有一个成功。
+    # 但它同时是个"占坑"标记 —— 所以下面失败时必须在 finally 里还回去，
+    # 否则一次失败（没玩家 / LLM 挂了）会让这个 NPC 今天再也反思不了。
+    mark_key = f"aitown:reflected:{npc_id}:{day}"
+    if not await redis.set(mark_key, "1", nx=True, ex=26 * 3600):
+        return
+
+    ok = False
+    try:
+        async with session_factory() as session:
+            npc = await session.get(NPC, npc_id)
+            player_id = await _observer_player_id(session)
+            if npc is None or player_id is None:
+                return
+
+            steps = await plans.load_plan(redis, npc_id=npc_id, day=day)
+            done_goals = [s["goal"] for s in steps if s.get("status") == "done"]
+            missed_goals = [s["goal"] for s in steps if s.get("status") == "missed"]
+            memories = await episodic.recent_contents(session, npc_id=npc_id)
+
+            insights = await reflection.reflect(
+                name=npc.name,
+                title=npc.title,
+                done_goals=done_goals,
+                missed_goals=missed_goals,
+                memories=memories,
+            )
+            if not insights:
+                return
+
+            count = await episodic.remember_reflection(
+                session, npc_id=npc_id, player_id=player_id, insights=insights
+            )
+            await session.commit()
+            log.info("reflected", npc=npc_name, insights=count, texts=insights)
+            ok = True
+    finally:
+        if not ok:
+            # 没反思成功 → 把标记还回去，下一个 tick 还能重试
+            await redis.delete(mark_key)
 
 
 async def tick_once(redis: Redis, session_factory) -> None:
@@ -212,7 +321,15 @@ async def tick_once(redis: Redis, session_factory) -> None:
         return
 
     # 3) ★ 优先推进计划：有人的计划到点了就做那件事，本轮不再闲聊
-    if await _advance_one_plan(redis, session_factory, now):
+    advanced = await _advance_one_plan(redis, session_factory, now)
+    if advanced:
+        await _maybe_reflect(
+            redis,
+            session_factory,
+            npc_id=advanced["npc_id"],
+            npc_name=advanced["npc_name"],
+            now=now,
+        )
         return
 
     # 4) 没有到点的计划 → 自由活动（原有的随机闲聊）

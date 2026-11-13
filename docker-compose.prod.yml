@@ -32,6 +32,7 @@ services:
       retries: 12
 
   api:
+    #定用当前目录下的 Dockerfile.api 来构建镜像。
     build:
       context: .
       dockerfile: Dockerfile.api

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { sendChat } from '@/api/chat'
+import { sendChat, sendChatStream } from '@/api/chat'
 import { ApiError } from '@/api/http'
 import type { ChatOut, Npc, ToolUsed } from '@/types/api'
 
@@ -53,6 +53,33 @@ function pushTurn(npcId: number, turn: Turn) {
   }
 }
 
+/** 往最后一条（正在流式输出的 NPC 气泡）追加文字 */
+function appendToLast(npcId: number, chunk: string) {
+  const list = histories.value[npcId] ?? []
+  if (!list.length) return
+  const last = list[list.length - 1]
+  histories.value = {
+    ...histories.value,
+    [npcId]: [...list.slice(0, -1), { ...last, text: last.text + chunk }],
+  }
+}
+
+/** 用最终结果替换最后一条：流式可能漏字，以 done 帧的 reply 为准 */
+function replaceLast(npcId: number, turn: Turn) {
+  const list = histories.value[npcId] ?? []
+  if (!list.length) return
+  histories.value = {
+    ...histories.value,
+    [npcId]: [...list.slice(0, -1), turn],
+  }
+}
+
+function dropLast(npcId: number) {
+  const list = histories.value[npcId] ?? []
+  if (!list.length) return
+  histories.value = { ...histories.value, [npcId]: list.slice(0, -1) }
+}
+
 async function scrollToBottom() {
   await nextTick()
   const box = scrollBox.value
@@ -81,15 +108,19 @@ async function send() {
 
   pushTurn(npc.id, { role: 'user', text })
   input.value = ''
+  // 先占一个空的 NPC 气泡，流式内容就往后追加
+  pushTurn(npc.id, { role: 'npc', text: '' })
   scrollToBottom()
 
-  try {
-    const result = await sendChat({
-      player_name: props.playerName.trim() || '小明',
-      npc_name: npc.name,
-      message: text,
-    })
-    pushTurn(npc.id, {
+  const npcId = npc.id
+  const outbound = {
+    player_name: props.playerName.trim() || '小明',
+    npc_name: npc.name,
+    message: text,
+  }
+
+  function settle(result: ChatOut) {
+    replaceLast(npcId, {
       role: 'npc',
       text: result.reply,
       delta: result.affinity_delta,
@@ -98,11 +129,30 @@ async function send() {
     affinity.value = { score: result.affinity_score, level: result.affinity_level }
     emit('chatted', result)
     scrollToBottom()
-  } catch (err) {
-    error.value =
-      err instanceof ApiError
-        ? `发送失败（${err.status}）：${err.message}`
-        : '发送失败：未知错误'
+  }
+
+  try {
+    // 流式：首字大约 0.8 秒出现，而不是等 3 秒整段蹦出来
+    const result = await sendChatStream(outbound, {
+      onDelta: (chunk) => {
+        appendToLast(npcId, chunk)
+        scrollToBottom()
+      },
+    })
+    settle(result)
+  } catch {
+    // 降级：浏览器不支持流、代理把 SSE 缓冲了、或者连接中途断了 ——
+    // 都能退回一次性接口，用户最多多等两秒，功能不受影响
+    dropLast(npcId)
+    try {
+      settle(await sendChat(outbound))
+    } catch (err) {
+      dropLast(npcId)
+      error.value =
+        err instanceof ApiError
+          ? `发送失败（${err.status}）：${err.message}`
+          : '发送失败：未知错误'
+    }
   } finally {
     sending.value = false
   }

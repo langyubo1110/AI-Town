@@ -240,3 +240,38 @@ def fallback_step(*, at: str, room: str = DEFAULT_ROOM) -> dict:
         "room": room if room in VALID_ROOMS else DEFAULT_ROOM,
         "status": "pending",
     }
+
+
+# ==================== 重排（replan） ====================
+
+
+def redistribute(steps: list[dict], *, start: str, end: str) -> list[dict]:
+    """把若干步骤均匀铺在 [start, end] 上，全部重置成 pending。
+
+    这是重规划的**确定性兜底**。重排本来要调 LLM，但模型可能超时、
+    可能返回窗口外的时间、可能少给几条。那时候不能"什么都不做" ——
+    否则又回到"有计划但全过期"的老毛病。均分虽然不聪明，但一定合法。
+
+    做法：把窗口按步数等分，每段取起点。
+    """
+    kept = [dict(step) for step in steps]
+    if not kept:
+        return []
+
+    begin, finish = parse_hhmm(start), parse_hhmm(end)
+    if begin is None or finish is None:
+        return kept
+
+    begin_min = begin.hour * 60 + begin.minute
+    finish_min = finish.hour * 60 + finish.minute
+    span = max(0, finish_min - begin_min)
+
+    # 步数比分钟还多时退化为同一时刻，绝不出现负数步长
+    gap = span // len(kept) if len(kept) <= span else 0
+
+    for index, step in enumerate(kept):
+        minute = min(_ceil_to_5(begin_min + index * gap), finish_min)
+        step["at"] = _fmt_hhmm(minute)
+        step["status"] = "pending"
+
+    return kept

@@ -27,6 +27,7 @@ SEED_NPCS = [
         "expertise": "多智能体系统、Python开发、代码优化",
         "style": "简洁专业，喜欢用技术术语，偶尔吐槽bug",
         "location": "工位区",
+        "weekly_goal": "把多智能体调度模块上线，减少任务超时",
     },
     {
         "name": "李四",
@@ -35,6 +36,7 @@ SEED_NPCS = [
         "expertise": "需求分析、产品规划、用户体验",
         "style": "友好热情，善于引导对话，喜欢用比喻",
         "location": "会议室",
+        "weekly_goal": "完成 Q4 购物车改版的需求评审并定稿",
     },
     {
         "name": "王五",
@@ -43,6 +45,7 @@ SEED_NPCS = [
         "expertise": "界面设计、交互设计、视觉呈现",
         "style": "优雅简洁，喜欢用艺术化的表达",
         "location": "休息区",
+        "weekly_goal": "交付登录页改版视觉稿并通过评审",
     },
 ]
 
@@ -59,7 +62,12 @@ async def main() -> None:
         for item in SEED_NPCS:
             exists = await session.scalar(select(NPC).where(NPC.name == item["name"]))
             if exists:
-                print(f"跳过（已存在）: {item['name']}")
+                # 已存在也要补新字段，否则"新加的列"永远只有新库才有值
+                if exists.weekly_goal != item.get("weekly_goal", ""):
+                    exists.weekly_goal = item.get("weekly_goal", "")
+                    print(f"更新周目标: {item['name']} → {exists.weekly_goal}")
+                else:
+                    print(f"跳过（已存在）: {item['name']}")
                 continue
             session.add(NPC(**item))
             print(f"插入: {item['name']}")

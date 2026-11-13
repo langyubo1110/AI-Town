@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.domain import affinity_rules
 from app.memory import episodic
 from app.models import NPC, Affinity
+from app.rag.search import search as search_documents
 
 log = get_logger(__name__)
 
@@ -145,4 +146,25 @@ def build_tools(session: AsyncSession, *, npc_id: int, player_id: int) -> list:
         # 只给内容，不给分数：分数是内部指标，对模型没有意义，只会干扰措辞
         return _clip("\n".join(f"- {item.content}" for item in hits))
 
-    return [get_time, get_town_status, search_memories]
+    @tool
+    async def search_docs(query: str) -> str:
+        """查阅公司内部的规章制度、研发规范、产品流程和新人指南。
+
+        当玩家问到公司**内部知识**时使用：比如"什么时候能发布""工号怎么编的"
+        "新人第一天做什么""需求评审什么时候开""试用期多久"。
+        query 用关键词（如"发布窗口""工号规则"），不要照抄整句。
+        玩家在聊他自己的事、或者问的是小镇里的人，不要调用。
+        """
+        keyword = query.strip()
+        if not keyword:
+            return "检索内容为空。"
+
+        hits = await search_documents(session, keyword, top_k=3)
+        if not hits:
+            return "知识库里没有找到相关内容。"
+
+        # 把来源一起给模型，它才能说出"依据是《研发规范》"
+        blocks = [f"【{hit.source}】{hit.content}" for hit in hits]
+        return _clip("\n\n".join(blocks) + "\n\n（回答时说明依据来自哪份文档）")
+
+    return [get_time, get_town_status, search_memories, search_docs]
