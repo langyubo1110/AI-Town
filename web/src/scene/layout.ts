@@ -29,9 +29,22 @@ export const ROOMS: Room[] = [
 /** 后端出现了未知 location 时的兜底房间 */
 const FALLBACK_ROOM = '休息区'
 
+/** 一个 NPC 的初始站位。
+ *
+ *  slot/slots 不只是给摆位置用的：NPC 会在房间里随机走动，
+ *  如果两人的活动范围都是整个房间，就会走到一起叠住（名字标签也糊成一团）。
+ *  所以把房间横向切成 slots 份，每人只在自己那一格里晃。
+ */
+export interface NpcSpawn {
+  x: number
+  y: number
+  slot: number
+  slots: number
+}
+
 export function placeNpcs<T extends { id: number; location: string }>(
   npcs: T[],
-): Map<number, { x: number; y: number }> {
+): Map<number, NpcSpawn> {
   // 1) 按房间分组（未知房间 → 兜底）
   const groups = new Map<string, T[]>()
   for (const npc of npcs) {
@@ -42,7 +55,7 @@ export function placeNpcs<T extends { id: number; location: string }>(
   }
 
   // 2) 每个房间里横向均分
-  const positions = new Map<number, { x: number; y: number }>()
+  const positions = new Map<number, NpcSpawn>()
   for (const [key, list] of groups) {
     const room = ROOMS.find((r) => r.key === key)!
     const usable = room.w - 120
@@ -53,6 +66,8 @@ export function placeNpcs<T extends { id: number; location: string }>(
       positions.set(npc.id, {
         x: startX + i * gap,
         y: room.y + room.h / 2 + 16,
+        slot: i,
+        slots: list.length,
       })
     })
   }

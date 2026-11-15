@@ -25,6 +25,10 @@ class PlanStepOut(BaseModel):
 class NpcPlanOut(BaseModel):
     npc_id: int
     npc_name: str
+    # 本周目标：让前端能显示"这些事是为了什么"
+    weekly_goal: str = ""
+    # 最近的反思：2 条足够，多了卡片放不下
+    reflections: list[str] = Field(default_factory=list)
     done: int
     total: int
     steps: list[PlanStepOut]

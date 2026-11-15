@@ -77,6 +77,10 @@ export interface PlanStep {
 export interface NpcPlan {
   npc_id: number
   npc_name: string
+  /** 本周目标（空串表示还没分配） */
+  weekly_goal: string
+  /** 最近的反思，最多 2 条 */
+  reflections: string[]
   done: number
   total: number
   steps: PlanStep[]

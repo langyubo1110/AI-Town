@@ -111,14 +111,19 @@ onBeforeUnmount(() => clearInterval(pollTimer))
 <template>
   <main class="town">
     <header class="bar">
-      <div>
+      <div class="brand">
         <h1>AI Town</h1>
-        <p class="sub">在镇子上走走，遇到人就聊两句</p>
+        <p class="sub">WASD / 方向键移动 · 走近 NPC 按 E 对话</p>
       </div>
-      <label class="who">
-        我是
-        <input v-model="playerName" maxlength="16" spellcheck="false" />
-      </label>
+
+      <div class="meta">
+        <span class="chip">居民 {{ npcs.length }}</span>
+        <span class="chip">今日计划 {{ plans.filter((p) => p.total > 0).length }} 份</span>
+        <label class="who">
+          我是
+          <input v-model="playerName" maxlength="16" spellcheck="false" />
+        </label>
+      </div>
     </header>
 
     <p v-if="loading" class="hint">加载中…</p>
@@ -128,22 +133,30 @@ onBeforeUnmount(() => clearInterval(pollTimer))
     </div>
 
     <template v-else>
-      <TownCanvas
-        :npcs="npcs"
-        @select="(npc) => (selected = npc)"
-        @request-chat="(npc) => (selected = npc)"
-      />
+      <!-- 左：小镇 + 今日计划；右：对话 + 事件流。
+           左右分栏是为了把画布撑高 —— 上下堆叠时画布被压扁，
+           世界的上下边缘会被裁掉。 -->
+      <div class="stage">
+        <!-- 左：画布独占整列高度 —— 这是主画面，不该被别的面板挤扁 -->
+        <section class="left">
+          <TownCanvas
+            :npcs="npcs"
+            @select="(npc) => (selected = npc)"
+            @request-chat="(npc) => (selected = npc)"
+          />
+        </section>
 
-      <PlanBoard
-        :plans="plans"
-        :loading="plansLoading"
-        :selected-id="selected?.id ?? null"
-        @select="onPlanSelect"
-      />
-
-      <div class="panels">
-        <ChatPanel :npc="selected" :player-name="playerName" @chatted="onChatted" />
-        <EventFeed :player-id="playerId" @event="onTownEvent" />
+        <!-- 右：今日计划 / 对话 / 事件流 三段 -->
+        <aside class="right">
+          <PlanBoard
+            :plans="plans"
+            :loading="plansLoading"
+            :selected-id="selected?.id ?? null"
+            @select="onPlanSelect"
+          />
+          <ChatPanel :npc="selected" :player-name="playerName" @chatted="onChatted" />
+          <EventFeed :player-id="playerId" @event="onTownEvent" />
+        </aside>
       </div>
     </template>
   </main>
@@ -151,20 +164,42 @@ onBeforeUnmount(() => clearInterval(pollTimer))
 
 <style scoped>
 .town {
-  max-width: 1180px;
+  max-width: 1580px;
   margin: 0 auto;
-  padding: 24px 20px 60px;
+  padding: 16px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* 桌面端锁死一屏：面板各自内部滚动，页面整体不滚 —— 画布才能拿到最大高度 */
+  height: 100vh;
+  min-height: 620px;
 }
 
+/* ---------- 顶栏 ---------- */
 .bar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
-h1 { font-size: 22px; }
-.sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.brand h1 { font-size: 20px; }
+.sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chip {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
 
 .who {
   display: flex;
@@ -174,7 +209,7 @@ h1 { font-size: 22px; }
   color: var(--muted);
 }
 .who input {
-  width: 110px;
+  width: 104px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -186,16 +221,43 @@ h1 { font-size: 22px; }
 }
 .who input:focus { border-color: var(--accent); }
 
-.panels {
+/* ---------- 分栏 ---------- */
+.stage {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
-  gap: 16px;
-  margin-top: 16px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 404px;
+  gap: 14px;
 }
 
-@media (max-width: 900px) {
-  .panels { grid-template-columns: 1fr; }
+.left {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.right {
+  /* 三段按比例分配，内容多了各自内部滚动。
+     计划占大头：三个 NPC 各 4 步，需要约 430px 才能一屏放完 */
+  display: grid;
+  grid-template-rows: minmax(0, 2.05fr) minmax(0, 0.98fr) minmax(0, 0.52fr);
+  gap: 12px;
+  min-height: 0;
+}
+
+/* 矮屏（1366×768 这类）：计划面板再要一点空间，避免第三张卡被切 */
+@media (max-height: 820px) {
+  .right { grid-template-rows: minmax(0, 2.3fr) minmax(0, 1fr) minmax(0, 0.6fr); }
+}
+
+/* 窄屏：取消分栏，回到上下堆叠并允许整页滚动 */
+@media (max-width: 1180px) {
+  .town { height: auto; min-height: 100vh; }
+  .stage { grid-template-columns: 1fr; }
+  .left { height: clamp(420px, 56vh, 620px); }
+  .right {
+    grid-template-rows: minmax(200px, auto) minmax(380px, auto) minmax(300px, auto);
+  }
 }
 
 .hint { color: var(--muted); margin-top: 16px; }

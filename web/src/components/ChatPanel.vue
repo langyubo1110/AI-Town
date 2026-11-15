@@ -227,7 +227,9 @@ function onKeydown(event: KeyboardEvent) {
 .chat {
   display: flex;
   flex-direction: column;
-  min-height: 380px;
+  /* 在分栏布局里要撑满右侧格子；min-height:0 允许它被压缩，否则会顶破容器 */
+  height: 100%;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -271,12 +273,12 @@ function onKeydown(event: KeyboardEvent) {
 
 .log {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 320px;
 }
 
 .bubble {

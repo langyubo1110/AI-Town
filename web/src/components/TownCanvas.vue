@@ -41,33 +41,23 @@ onBeforeUnmount(() => {
 <template>
   <div class="canvas-wrap">
     <div ref="host" class="canvas-host" />
-    <p class="hint">WASD / 方向键 移动 · 走近 NPC 按 E 对话</p>
   </div>
 </template>
 
 <style scoped>
 .canvas-wrap {
   position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 400px;
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
 }
 
 .canvas-host {
-  width: 100%;
-  height: 480px;
-}
-
-.hint {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  font-size: 11px;
-  color: var(--muted);
-  background: rgba(10, 12, 16, 0.6);
-  padding: 2px 8px;
-  border-radius: 999px;
-  pointer-events: none;
-  user-select: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
 }
 </style>

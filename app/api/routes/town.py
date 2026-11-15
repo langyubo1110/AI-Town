@@ -15,6 +15,7 @@ from app.api.schemas.town import (
 )
 from app.core.clock import local_now
 from app.domain import plans as plan_rules
+from app.memory import episodic
 from app.models import Player
 from app.repos import npc_repo
 from app.worker.streams import publish
@@ -77,6 +78,11 @@ async def list_plans(
             NpcPlanOut(
                 npc_id=npc.id,
                 npc_name=npc.name,
+                weekly_goal=npc.weekly_goal or "",
+                # 反思只在生成计划时用，这里读出来纯为展示；3 个 NPC 多两次查询可以接受
+                reflections=await episodic.load_reflections(
+                    session, npc_id=npc.id, limit=2
+                ),
                 done=done,
                 total=total,
                 steps=[PlanStepOut(**step) for step in steps],

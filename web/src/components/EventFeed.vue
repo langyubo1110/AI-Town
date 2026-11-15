@@ -139,8 +139,9 @@ function linesOf(event: TownEvent): { speaker: string; text: string }[] {
 .feed {
   display: flex;
   flex-direction: column;
-  min-height: 380px;
-  max-height: 620px;
+  /* 撑满右侧格子；min-height:0 允许被压缩，否则会把容器顶破 */
+  height: 100%;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -181,6 +182,8 @@ function linesOf(event: TownEvent): { speaker: string; text: string }[] {
 
 .list {
   list-style: none;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 12px 14px;
   display: flex;

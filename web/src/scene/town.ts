@@ -8,6 +8,7 @@
 import { Application, Container, Graphics, Sprite, Text } from 'pixi.js'
 import type { Npc } from '@/types/api'
 import { ROOMS, TILE, WORLD_HEIGHT, WORLD_WIDTH, placeNpcs } from './layout'
+import type { NpcSpawn } from './layout'
 import { CHAR_H, CHAR_W, loadCharacterClip } from './assets'
 import type { CharClip } from './assets'
 
@@ -146,7 +147,7 @@ export class TownScene {
     npcs.forEach((npc, index) => {
       const spawn = spawns.get(npc.id)
       if (!spawn) return
-      void this.createNpcActor(npc, index + 1, spawn.x, spawn.y)
+      void this.createNpcActor(npc, index + 1, spawn)
     })
   }
 
@@ -337,8 +338,12 @@ export class TownScene {
     const { width, height } = this.app.screen
     if (width <= 0 || height <= 0) return
 
-    // 视口越小，放大越多；这样窄屏也能看清人物
-    const zoom = clamp(Math.min(width, height) / 380, 1.15, 2.2)
+    // 优先"整个世界都看得见"：取能装下 720×520 的缩放比。
+    // 早期写法是 min(宽,高)/380 放大 —— 画布又宽又扁时，垂直方向只显示 380，
+    // 而世界高 520，于是会议室顶部和休息区底部被裁掉（用户看到的"显示不全"）。
+    // 现在的取舍：先保证看得全；真的装不下（窄屏）时再靠相机跟随看局部。
+    const fitZoom = Math.min(width / (WORLD_WIDTH + 24), height / (WORLD_HEIGHT + 24))
+    const zoom = clamp(fitZoom, 0.8, 2.2)
     this.world.scale.set(zoom)
 
     const viewW = width / zoom
@@ -381,7 +386,10 @@ export class TownScene {
         text: room.label,
         style: { fill: COLOR.muted, fontSize: 13, fontFamily: FONT },
       })
-      label.position.set(room.x + 12, room.y + 8)
+      // 放在房间框上边框外侧：房间内部要留给 NPC 和他们的名字标签，
+      // 放里面任一角落都可能被走过去的 NPC 压住
+      label.anchor.set(0, 1)
+      label.position.set(room.x + 8, room.y - 6)
       layer.addChild(label)
     }
 
@@ -402,10 +410,15 @@ export class TownScene {
 
     const me = new Text({
       text: '我',
-      style: { fill: COLOR.prompt, fontSize: 11, fontFamily: FONT },
+      style: {
+        fill: COLOR.prompt,
+        fontSize: 12,
+        fontFamily: FONT,
+        stroke: { color: '#0b0d12', width: 3 },
+      },
     })
-    me.anchor.set(0.5, 0)
-    me.position.set(0, 4)
+    me.anchor.set(0.5, 1)
+    me.position.set(0, -CHAR_H - 6)
     root.addChild(me)
 
     return {
@@ -425,20 +438,33 @@ export class TownScene {
     }
   }
 
-  private async createNpcActor(npc: Npc, sheetIndex: number, x: number, y: number): Promise<void> {
+  private async createNpcActor(
+    npc: Npc,
+    sheetIndex: number,
+    spawn: NpcSpawn,
+  ): Promise<void> {
     const clip = await loadCharacterClip(sheetIndex)
     if (!clip || this.destroyed) return
 
     const room = ROOMS.find((r) => r.key === npc.location) ?? ROOMS[ROOMS.length - 1]
+
+    // 横向按槽位切分：同房间有多人时，各自只在自己那一格里走动，避免叠在一起
+    const pad = 14
+    const usable = room.w - NPC_INSET * 2
+    const slotW = usable / spawn.slots
+    const x0 = room.x + NPC_INSET + spawn.slot * slotW + pad
+    const slotRight = room.x + NPC_INSET + (spawn.slot + 1) * slotW - pad
+
     const bounds: Bounds = {
-      x0: room.x + NPC_INSET,
-      y0: room.y + NPC_INSET + 24,
-      x1: room.x + room.w - NPC_INSET,
+      x0,
+      x1: Math.max(x0 + 8, slotRight),
+      // 下边界下压一个身位：标签画在头顶，起点太靠上会顶出房间（压在房间名上）
+      y0: room.y + CHAR_H + 38,
       y1: room.y + room.h - NPC_INSET,
     }
 
     const root = new Container()
-    root.position.set(x, y)
+    root.position.set(spawn.x, spawn.y)
 
     const ring = new Graphics()
       .ellipse(0, 0, 26, 11)
@@ -459,27 +485,44 @@ export class TownScene {
 
     const prompt = new Text({
       text: '按 E 对话',
-      style: { fill: COLOR.prompt, fontSize: 11, fontFamily: FONT },
+      style: {
+        fill: COLOR.prompt,
+        fontSize: 11,
+        fontFamily: FONT,
+        stroke: { color: '#0b0d12', width: 3 },
+      },
     })
     prompt.anchor.set(0.5, 1)
-    prompt.position.set(0, -CHAR_H - 4)
+    // 放在名字上方：脚下已经没有空间了（下一个人可能就站在旁边）
+    prompt.position.set(0, -CHAR_H - 38)
     prompt.visible = false
     root.addChild(prompt)
 
+    // 名字和职位都放在头顶上方（之前放在脚下，同屋有两个人时会被别人的精灵盖住）
     const name = new Text({
       text: npc.name,
-      style: { fill: COLOR.text, fontSize: 13, fontFamily: FONT },
+      style: {
+        fill: COLOR.text,
+        fontSize: 13,
+        fontFamily: FONT,
+        stroke: { color: '#0b0d12', width: 3 },
+      },
     })
-    name.anchor.set(0.5, 0)
-    name.position.set(0, 3)
+    name.anchor.set(0.5, 1)
+    name.position.set(0, -CHAR_H - 20)
     root.addChild(name)
 
     const title = new Text({
       text: npc.title,
-      style: { fill: COLOR.muted, fontSize: 10, fontFamily: FONT },
+      style: {
+        fill: COLOR.muted,
+        fontSize: 10,
+        fontFamily: FONT,
+        stroke: { color: '#0b0d12', width: 3 },
+      },
     })
-    title.anchor.set(0.5, 0)
-    title.position.set(0, 20)
+    title.anchor.set(0.5, 1)
+    title.position.set(0, -CHAR_H - 6)
     root.addChild(title)
 
     this.npcLayer.addChild(root)

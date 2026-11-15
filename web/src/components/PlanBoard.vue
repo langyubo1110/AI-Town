@@ -40,7 +40,7 @@ function badgeOf(step: PlanStep): string {
   <section class="board">
     <header class="head">
       <strong>今日计划</strong>
-      <span class="tip">到点自动执行：换房间 → 写事件 → 推到这个页面</span>
+      <span class="tip">到点自动执行</span>
     </header>
 
     <p v-if="loading && sorted.length === 0" class="muted">加载中…</p>
@@ -56,6 +56,10 @@ function badgeOf(step: PlanStep): string {
       >
         <div class="row">
           <strong class="name">{{ plan.npc_name }}</strong>
+          <!-- 目标并进首行：单独占一行会让每张卡多 20px，右栏放不下三张 -->
+          <span v-if="plan.weekly_goal" class="goal" :title="plan.weekly_goal">
+            {{ plan.weekly_goal }}
+          </span>
           <span class="count">{{ plan.done }}/{{ plan.total }}</span>
         </div>
 
@@ -67,43 +71,63 @@ function badgeOf(step: PlanStep): string {
         <ul v-else class="steps">
           <li v-for="(step, index) in plan.steps" :key="index" :class="step.status">
             <span class="at">{{ step.at }}</span>
-            <span class="goal">{{ step.goal }}</span>
+            <span class="goal-text">{{ step.goal }}</span>
             <span class="room">{{ step.room }}</span>
             <span v-if="step.status !== 'pending'" class="badge">
               {{ badgeOf(step) }}
             </span>
           </li>
         </ul>
+
+        <!-- 反思默认收起：卡片要能一眼看完，想看再点开 -->
+        <details v-if="plan.reflections.length" class="thoughts" @click.stop>
+          <summary>最近的思考</summary>
+          <p v-for="(item, index) in plan.reflections" :key="index">{{ item }}</p>
+        </details>
       </article>
     </div>
   </section>
 </template>
 
 <style scoped>
-.board { margin-top: 16px; }
+.board {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 
 .head {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  flex: 0 0 auto;
 }
 .tip { font-size: 11px; color: var(--muted); }
 
 .cards {
   display: flex;
-  gap: 10px;
-  overflow-x: auto;
-  padding-bottom: 6px;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
   scrollbar-width: thin;
+  scrollbar-color: #2d3340 transparent;
+}
+.cards::-webkit-scrollbar { width: 6px; }
+.cards::-webkit-scrollbar-thumb {
+  background: #2d3340;
+  border-radius: 999px;
 }
 
 .card {
-  flex: 0 0 262px;
+  flex: 0 0 auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   cursor: pointer;
   transition: border-color 0.15s;
 }
@@ -113,17 +137,28 @@ function badgeOf(step: PlanStep): string {
 .row {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 8px;
 }
-.name { font-size: 13px; }
-.count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.name { font-size: 13px; flex: 0 0 auto; }
+.count { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+
+/* 周目标：和名字同行，靠右省略号；悬停看全文 */
+.goal {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: #8fa6c4;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .bar {
   height: 4px;
   background: #20242e;
   border-radius: 999px;
-  margin: 7px 0 9px;
+  margin: 6px 0 7px;
   overflow: hidden;
 }
 .bar i {
@@ -138,27 +173,28 @@ function badgeOf(step: PlanStep): string {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
 }
 .steps li {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 1.45;
 }
 .at {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
-.goal {
+.goal-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .room {
   flex: 0 0 auto;
   font-size: 10px;
@@ -173,11 +209,48 @@ function badgeOf(step: PlanStep): string {
   border-radius: 999px;
   padding: 0 6px;
 }
-li.done .goal { color: var(--muted); text-decoration: line-through; }
+li.done .goal-text { color: var(--muted); text-decoration: line-through; }
 li.done .badge { color: #4ade80; border: 1px solid #2c5137; }
-li.missed .goal { color: #7b8496; }
+li.missed .goal-text { color: #7b8496; }
 li.missed .badge { color: #f87171; border: 1px solid #5a2a2a; }
+
+/* 反思：默认收起，点开才占空间 */
+.thoughts {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.thoughts summary {
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.thoughts summary::-webkit-details-marker { display: none; }
+.thoughts summary:hover { color: var(--text); }
+.thoughts p {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #c9d4e5;
+  padding-left: 8px;
+  border-left: 2px solid #2c3b55;
+}
 
 .empty { font-size: 11px; color: var(--muted); line-height: 1.5; }
 .muted { color: var(--muted); font-size: 13px; }
+
+/* 矮屏（1366×768 这类）：再压一档，让三张卡一屏放完 */
+@media (max-height: 820px) {
+  .card { padding: 5px 8px; }
+  .cards { gap: 4px; }
+  .steps { gap: 2px; }
+  .steps li { align-items: center; font-size: 10px; line-height: 1.3; }
+  .at { font-size: 10px; }
+  .room { font-size: 9px; padding: 0 4px; line-height: 1.5; }
+  .bar { margin: 4px 0 5px; }
+  .name { font-size: 12px; }
+  .goal { font-size: 10px; }
+}
 </style>
