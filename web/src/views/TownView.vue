@@ -153,7 +153,7 @@ onBeforeUnmount(() => clearInterval(pollTimer))
            左右分栏是为了把画布撑高 —— 上下堆叠时画布被压扁，
            世界的上下边缘会被裁掉。 -->
       <div class="stage">
-        <!-- 第一列：画布独占整列高度 —— 这是主画面，不该被别的面板挤扁 -->
+        <!-- 第一列：画布占满整列（上下两行都归它） -->
         <section class="left">
           <TownCanvas
             :npcs="npcs"
@@ -162,7 +162,7 @@ onBeforeUnmount(() => clearInterval(pollTimer))
           />
         </section>
 
-        <!-- 第二列：今日计划（宽屏时独占一列，卡片不用再挤着看） -->
+        <!-- 第二列：今日计划 -->
         <section class="mid">
           <PlanBoard
             :plans="plans"
@@ -172,11 +172,13 @@ onBeforeUnmount(() => clearInterval(pollTimer))
           />
         </section>
 
-        <!-- 第三列：打招呼（上）+ 小镇动态（下） -->
-        <aside class="side">
+        <!-- 第三列：打招呼 -->
+        <section class="side">
           <ChatPanel :npc="selected" :player-name="playerName" @chatted="onChatted" />
-          <EventFeed :player-id="playerId" @event="onTownEvent" />
-        </aside>
+        </section>
+
+        <!-- 底部横排：小镇动态（横跨计划 + 打招呼两列，与画布下沿对齐） -->
+        <EventFeed class="feed-row" :player-id="playerId" @event="onTownEvent" />
       </div>
     </template>
   </main>
@@ -246,11 +248,16 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* 宽屏三列：画布 | 今日计划 | 打招呼 + 动态
-     窄屏两列：画布 | (计划 / 打招呼 / 动态 竖着叠) */
+  /* 三列 + 一条横跨右侧两列的底部动态：
+       画布 | 计划 | 打招呼
+       画布 |   小镇动态（横排）
+     这样画布占满左边整列，右侧上沿与画布齐平、下沿也齐平。 */
   grid-template-columns: minmax(0, 1fr) 320px 344px;
-  grid-template-areas: "left mid side";
-  gap: 14px;
+  grid-template-rows: minmax(0, 1fr) 196px;
+  grid-template-areas:
+    "left mid side"
+    "left feed feed";
+  gap: 12px;
 }
 
 .left {
@@ -260,7 +267,7 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   min-height: 0;
 }
 
-/* 计划独占一列：卡片高度不再被对话/动态挤，三张卡一屏放得下 */
+/* 计划独占一列：卡片高度不再被对话/动态挤 */
 .mid {
   grid-area: mid;
   display: flex;
@@ -268,31 +275,32 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   min-height: 0;
 }
 
-/* 第三列：打招呼（上）+ 动态（下） */
+/* 第三列只有打招呼（动态挪到底部通栏了） */
 .side {
   grid-area: side;
-  display: grid;
-  grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
-/* 中等屏（1366 这类，以及 1920 屏开 125% 缩放后的 ~1528）：三列会把画布压得太窄，
-   退回两列，计划 / 打招呼 / 动态 竖着排在右列 */
+/* 底部横排动态：跨 mid + side 两列 */
+.feed-row {
+  grid-area: feed;
+  min-height: 0;
+}
+
+/* 中等屏（1366 这类）：三列会把画布压得太窄，退回两列。
+   画布仍占满左边整列，右列自上而下是 计划 / 打招呼 / 动态（动态横排、只占右列宽度）。
+   1366×768 这一档装不下"四条都完整"，计划卡片允许内部滚动。 */
 @media (max-width: 1439px) {
   .stage {
     grid-template-columns: minmax(0, 1fr) 404px;
-    grid-template-rows: minmax(0, 2.1fr) minmax(0, 1.45fr);
+    grid-template-rows: minmax(0, 1.75fr) minmax(0, 1fr) 130px;
     grid-template-areas:
       "left mid"
-      "left side";
+      "left side"
+      "left feed";
   }
-  .side { grid-template-rows: minmax(0, 1fr) minmax(0, 0.68fr); }
-}
-
-/* 矮屏（1366×768 这类）：计划面板再要一点空间，避免第三张卡被切 */
-@media (max-height: 820px) and (max-width: 1439px) {
-  .stage { grid-template-rows: minmax(0, 2.3fr) minmax(0, 1.6fr); }
 }
 
 /* 窄屏：完全取消分栏，上下堆叠并允许整页滚动 */
@@ -301,11 +309,12 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   .stage {
     grid-template-columns: 1fr;
     grid-template-rows: none;
-    grid-template-areas: "left" "mid" "side";
+    grid-template-areas: "left" "mid" "feed" "side";
   }
   .left { height: clamp(420px, 56vh, 620px); }
   .mid { max-height: 520px; }
-  .side { grid-template-rows: minmax(360px, auto) minmax(280px, auto); }
+  .feed-row { height: 200px; }
+  .side { height: 380px; }
 }
 
 .hint { color: var(--muted); margin-top: 16px; }
