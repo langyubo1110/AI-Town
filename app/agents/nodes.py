@@ -15,10 +15,12 @@ from app.agents.prompts import (
 )
 from app.models import Affinity
 from app.agents.state import ChatState
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.domain import affinity_rules,events
 from app.domain.exceptions import NPCNotFoundError
 from app.infra.llm import get_chat_model
+from app.rag.search import search as docs_search
 from app.repos import affinity_repo, npc_repo, player_repo,event_repo
 from langchain_core.runnables import RunnableConfig
 
@@ -90,6 +92,41 @@ async def retrieve_memory(state: ChatState, config: RunnableConfig) -> dict:
 
     return {"recent_turns": recent, "recalled_memories": recalled_texts}
 
+
+async def retrieve_docs(state: ChatState, config: RunnableConfig) -> dict:
+    """并行分支：查内部知识库（和 retrieve_memory 同时跑）。
+
+    为什么把它从"工具"提到"图里的并行节点"：
+        走工具的话是「模型先决定调 → 执行 → 模型再想一遍」，多一次 LLM 往返（约 1.5s）。
+        作为前置并行节点，它和记忆检索在同一个 superstep 里跑，实际只多一次 embedding；
+        而且检索结果直接进 prompt，模型"开口就知道"，不用先问一次工具。
+
+    检索工具 search_docs 仍然保留：模型可以带着更精确的 query 再查一次。
+    """
+    settings = get_settings()
+    if not settings.docs_prefetch_enabled:
+        return {"doc_snippets": []}
+
+    try:
+        hits = await docs_search(
+            get_session(config), state["message"], top_k=settings.docs_prefetch_top_k
+        )
+    except Exception as exc:
+        # 文档检索是"增强"，查不到就不注入，绝不影响本轮对话
+        log.warning(
+            "docs_prefetch_failed", error=type(exc).__name__, detail=str(exc)[:200]
+        )
+        return {"doc_snippets": []}
+
+    snippets = [f"【{hit.source}】{hit.content}" for hit in hits]
+    if snippets:
+        log.info(
+            "docs_prefetched",
+            count=len(snippets),
+            sources=[hit.source for hit in hits],
+        )
+    return {"doc_snippets": snippets}
+
 def _build_agent_messages(state: ChatState) -> list:
     """拼 agent_step 的消息：人设 + 最近对话 + 长期记忆 + 玩家这句话 + 工具轨迹。
 
@@ -108,7 +145,17 @@ def _build_agent_messages(state: ChatState) -> list:
     recalled = state.get("recalled_memories") or []
     if recalled:
         messages.append(
-            SystemMessage(content=f"【你记得关于这个人的事】\n" + "\n".join(recalled))
+            SystemMessage(content="【你记得关于这个人的事】\n" + "\n".join(recalled))
+        )
+
+    # 并行节点预取的内部知识（可能和玩家的问题相关）
+    docs = state.get("doc_snippets") or []
+    if docs:
+        messages.append(
+            SystemMessage(
+                content="【公司内部知识（可能相关，用得上就引用文档名）】\n"
+                + "\n\n".join(docs)
+            )
         )
 
     messages.append(HumanMessage(content=state["message"]))

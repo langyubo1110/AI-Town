@@ -12,6 +12,7 @@
 | 玩家可控移动（WASD）+ 相机跟随 + 像素动画 | ✅ | 游戏循环、坐标系、渲染分层 |
 | 走近按 E 对话，LLM 按人设回复 | ✅ | Prompt 工程、降级策略 |
 | **工具调用（ReAct 循环）**：查时间 / 查小镇 / 翻记忆 / **查文档** | ✅ | Function Calling、状态机循环、防死循环 |
+| **并行检索（DAG 扇出 + 汇聚）**：记忆与文档同时查，省一次 LLM 往返 | ✅ | LangGraph 并行分支、fan-in 屏障、延迟打点 |
 | **两级记忆**：Redis 工作记忆 + pgvector 长期记忆 | ✅ | 短期/长期记忆、TTL、向量存储 |
 | **两段式检索 + 三因子重排** | ✅ | RAG、召回与重排分离、消融实验 |
 | **文档 RAG**：切块 + 向量/BM25 双路召回 + RRF 融合 + 引用出处 | ✅ | chunking、hybrid retrieval、RRF、citation |
@@ -103,12 +104,13 @@ routes ──→ agents ──→ memory ──→ repos ──→ models
 
 ![对话链路](docs/images/chat-flow.svg)
 
-**8 个节点 + 1 个工具循环**，状态在 `ChatState`（22 个字段）里流转。
+**10 个节点 + 1 个工具循环**（`retrieve_docs` 与 `retrieve_memory` 并行，见下），状态在 `ChatState`（23 个字段）里流转。
 
 | 节点 | 做什么 | 关键设计 |
 |---|---|---|
 | `load_context` | 查 NPC / 玩家 / 好感度，拼 system_prompt | **每轮清零临时字段**（见踩坑 #8） |
 | `retrieve_memory` | Redis 取 5 轮 + pgvector 召回 Top-5 | 记忆读失败只降级，不报错 |
+| `retrieve_docs` | 内部知识库 BM25+向量+RRF → Top-2 | **和记忆检索并行**（fan-out） |
 | `agent_step` | 绑工具调一次 LLM | **决策 + 回答合一** |
 | `tool_node` | 执行工具，写 `tool_trace` | 异常当观察结果回填 |
 | `analyze_turn` | 一次结构化输出拿 delta / importance / facts | 一次调用产出三个信号 |
@@ -125,6 +127,38 @@ routes ──→ agents ──→ memory ──→ repos ──→ models
 
 > 为什么？`MemorySaver` 现在把 state 放在内存 dict 里，放 ORM 对象"暂时"能跑；
 > 一旦换成 `PostgresSaver` 就立刻炸。**现在遵守零成本，将来改要重写所有节点。**
+
+#### 检索为什么是并行分支（真 DAG 的扇出 + 汇聚）
+
+```
+load_context
+   ├──→ retrieve_memory   （Redis 5 轮 + pgvector Top-5）  ┐ 同一个 superstep
+   └──→ retrieve_docs     （BM25 + 向量 + RRF → Top-2）    ┘ 并行执行
+                   ↓ 两个都完成才继续（fan-in 屏障）
+              agent_step
+```
+
+| | 走工具（旧） | 并行节点（现在） |
+|---|---|---|
+| 路径 | 模型先决定调 → 执行 → 模型再想一遍 | 进图就查，结果直接进 prompt |
+| 额外开销 | **多一次 LLM 往返（~1.5s）** | 多一次 embedding（~0.1s，且和记忆检索重叠） |
+
+实测时间线（`astream_events` 打点，单位秒）：
+
+```
+load_context      0.01 → 0.09
+retrieve_memory   0.10 → 1.67   1.58s  ┐ 同时开始
+retrieve_docs     0.10 → 1.61   1.52s  ┘ 重叠 1.52s
+agent_step        1.68 → 3.59          ← 两个都完成才开始
+```
+
+**串行需要 0.09 + 1.58 + 1.52 ≈ 3.2s 才进 agent_step，现在 1.68s。**
+
+效果：问"公司的发布窗口是什么时候"，**一次工具都没调**，直接答"周二和周四 14:00–16:00"。
+`search_docs` 工具仍然保留——模型可以带着更精确的 query 再查一次。
+
+> 代价：每轮多一次 embedding，且会把 2 个块塞进 prompt（约 130 token），
+> 闲聊时属于浪费。所以留了开关 `DOCS_PREFETCH_ENABLED`，可以退回"只有工具"的旧行为。
 
 ### 2.2 工具调用（ReAct 循环）
 
@@ -410,6 +444,16 @@ query ─┬─ ① 向量召回 top40   （管"意思相近"）
 | 两路**各自独立**召回 | 若只在向量召回的 40 条里做 BM25 微调，向量没召回的永远进不来，互补就废了 |
 
 **引用**：工具返回时把 `【文件名】` 一起给模型，于是回答会说"依据是《研发规范》"。
+
+**两条路径并存**：
+
+| 入口 | 时机 | 用途 |
+|---|---|---|
+| `retrieve_docs` 节点 | 每轮对话**前置并行** | 常见问题直接答，省一次 LLM 往返 |
+| `search_docs` 工具 | 模型自己决定 | 前置结果不够时，带更精确的 query 再查 |
+
+**权重是扫出来的**（详见 [5.4](#54-文档-rag-消融32-条用例top-3)）：等权 RRF 在这批语料上
+反而比纯向量差 3 个点，调到 **向量 3 : BM25 1** 才持平。BM25 在当前规模下是保险，不是主力。
 
 ### 2.8 流式输出（SSE）
 
@@ -734,8 +778,13 @@ cd web && npm run dev         # http://localhost:5173
 cp .env .env.prod             # 把 localhost 改成服务名（postgres / redis）
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec api python -m scripts.seed
+docker compose -f docker-compose.prod.yml exec api python -m scripts.ingest_docs
 # http://localhost:8080
 ```
+
+> ⚠️ **最后一行别省**。生产库和新开发库是两套数据，`seed` 只灌 NPC，不灌知识库。
+> 漏了这一步的表现是：问公司规定时 NPC 会说"知识库没检索到"，
+> 而且日志里没有 `docs_prefetched`——**看起来像 RAG 坏了，其实只是没灌数据**。
 
 > api 只 `expose` 不 `ports`，所以 `localhost:8000` 打不通是正常的 ——
 > 请求必须走 `8080 → nginx → api:8000`。**uvicorn 跑在容器里，由 compose 托管。**
@@ -773,14 +822,14 @@ NPC 有当日计划、会自己互动，整条链路有评测和链路追踪。
 **然后按这个顺序讲**：
 
 1. **架构**：七层分层、依赖单向、`domain` 零依赖可单测
-2. **状态机**：LangGraph 8 节点 + 工具循环，state 只放可序列化数据
+2. **状态机**：LangGraph 10 节点 + 并行检索（扇出/汇聚）+ 工具循环，state 只放可序列化数据
 3. **记忆 + 检索**：两级记忆、两段式检索、三因子（**这是 RAG**）、消融实验证明权重
 4. **工具调用**：ReAct 循环、决策与回答合一、防死循环靠"收回工具"
 5. **异步 + 实时**：Stream 消费组 + ACK，commit→publish→ACK 的顺序，WS 双任务
 6. **评测**：检索消融 / 工具选择 / LLM-judge，**每个数字都带折扣**
 7. **踩坑**：幽灵进程 / checkpointer 跨轮泄漏 / WS 反代三行
 
-**大概率被追问的八个问题**：
+**大概率被追问的九个问题**：
 
 | 问题 | 怎么答 |
 |---|---|
@@ -792,6 +841,7 @@ NPC 有当日计划、会自己互动，整条链路有评测和链路追踪。
 | 消息重复消费怎么办？ | Stream 是至少一次；用 `events.dedupe_key`（部分唯一索引）挡重复，实测同一 msg_id 处理两次只落一条 |
 | 3.5 秒延迟怎么优化？ | 已经做了流式（首字 1.3~2.5s）；还能做的：`analyze_turn` 与回复并行、embedding 批量 |
 | 你做过 Agent 吗？ | 编排 + 多智能体 + 记忆 + 工具调用 + 规划（含目标/反思/重规划）+ 文档 RAG |
+| 你们用 DAG 吗？ | 主干是 DAG（检索两支并行扇出 + fan-in 汇聚）；但 `agent_step ⇄ tool_node` 是**刻意的环**——Agent 的"想一想、查一下、再想想"本质就是循环，硬做成 DAG 只能展开成固定深度。**有向有环图才是对的形态**，不是不会做 DAG |
 
 ---
 

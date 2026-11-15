@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     npc_tick_max_backlog: int = 20     # 队列积压超过这个数就不再投递
     reflect_every_steps: int = 2       # 完成几步之后做一次反思（当天最多一次）
     replan_max_per_day: int = 2        # 每个 NPC 每天最多重排几次计划（防烧钱）
+
+    # ---- 内部知识库（文档 RAG）----
+    # 前置并行检索：省掉"模型先决定调工具"的那一次 LLM 往返。
+    # 关掉就退回"只有 search_docs 工具"的旧行为。
+    docs_prefetch_enabled: bool = True
+    docs_prefetch_top_k: int = 2       # 塞进 prompt 的块数，多了会稀释人设
     # ---- 时区 ----
     # 容器默认是 UTC，而"日程"是给人看的本地时间。不显式指定的话，
     # 计划写着 09:15，容器的 now 却是 03:15 —— 一整天都不会有一步到点。

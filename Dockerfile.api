@@ -16,6 +16,9 @@ COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
 COPY scripts ./scripts
+# 内部知识库：文档 RAG 的数据源。
+# 不拷进来，容器里就没有可灌的文档 —— 线上会表现为"知识库没检索到"。
+COPY docs/kb ./docs/kb
 
 # 非 root 运行
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

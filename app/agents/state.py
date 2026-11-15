@@ -58,6 +58,8 @@ class ChatState(TypedDict, total=False):
                                   # 拼提示词时用「你们最近的对话」
     recalled_memories: list[str]  # 长期记忆：pgvector 三因子重排后的 top-5 内容（只有文本，
                                   # 分数在 recall 里打日志）。拼提示词时用「你记得关于这个人的事」
+    doc_snippets: list[str]       # 内部知识库预取结果（并行节点 retrieve_docs 写）。
+                                  # 每条形如「【研发规范.md】正文…」，拼提示词时带来源引用
     importance: float             # 本轮对话作为记忆的重要性 0~1，由 LLM 打分。
                                   # write_memory 用它填 memories.importance 列
     facts: list[str]              # 本轮抽取的关于玩家的稳定事实（0~2 条）。

@@ -1,13 +1,17 @@
 """构建对话图。
 
-拓扑（★ 是这次新加的工具循环）：
+拓扑（★ 是这次的改动：检索从串行变成**并行扇出 + 汇聚**）：
 
     START
       │
-    load_context          查 NPC/玩家/好感度 → 拼 system_prompt
+    load_context              查 NPC/玩家/好感度 → 拼 system_prompt
       │
-    retrieve_memory       取工作记忆 + 长期记忆
-      │
+      ├──────────────┬──────────────┐        ← fan-out：同一个 superstep 并行
+      ▼              ▼
+    retrieve_memory  retrieve_docs           记忆（pgvector）   文档（BM25+向量）
+      │              │
+      └──────┬───────┘                        ← fan-in：两个都完成才进下一步
+             ▼
     agent_step  ★         绑上工具，一次调用决定「说话」还是「调工具」
       │
       ├─ 有 tool_calls ──→ tool_node ★ ──┐
@@ -18,8 +22,12 @@
 
     analyze_turn → apply_affinity → [emit_level_up] → write_memory → persist → END
 
-设计要点：agent_step 一次调用同时负责「决策」和「回答」，
-所以**不需要工具时没有任何额外开销**（不是在它前面再加一个分类节点）。
+设计要点：
+1. agent_step 一次调用同时负责「决策」和「回答」，所以**不需要工具时没有任何额外开销**。
+2. 检索做成并行分支而不是工具：走工具要多一次 LLM 往返（约 1.5s），
+   并行节点只多一次 embedding，而且两个检索互不依赖 —— 这正是 DAG 扇出该用的地方。
+3. 工具循环（agent_step ⇄ tool_node）是**刻意的环**：Agent 需要"想一想、查一下、再想想"，
+   硬做成 DAG 就得展开成固定深度，既不灵活也浪费。所以这张图主干是 DAG、局部有环。
 """
 
 from functools import lru_cache
@@ -43,6 +51,8 @@ def build_chat_graph():
     graph.add_node("load_context", nodes.load_context)
     # 检索相关记忆（工作记忆 + 长期记忆）
     graph.add_node("retrieve_memory", nodes.retrieve_memory)
+    # ★ 并行分支：查内部知识库（和 retrieve_memory 同时跑）
+    graph.add_node("retrieve_docs", nodes.retrieve_docs)
     # ★ 决策 + 回答合一：绑工具调一次 LLM
     graph.add_node("agent_step", nodes.agent_step)
     # ★ 执行工具调用，把结果写进 tool_trace
@@ -59,8 +69,12 @@ def build_chat_graph():
     graph.add_node("persist", nodes.persist)
 
     graph.add_edge(START, "load_context")
+    # ★ fan-out：两条边从同一个节点出发，LangGraph 会把它们放进同一个 superstep 并行执行
     graph.add_edge("load_context", "retrieve_memory")
+    graph.add_edge("load_context", "retrieve_docs")
+    # ★ fan-in：agent_step 有两条入边，必须两个都完成才会开始（天然的屏障）
     graph.add_edge("retrieve_memory", "agent_step")
+    graph.add_edge("retrieve_docs", "agent_step")
 
     # ★ 工具循环：需要工具 → 执行 → 回到 agent_step 再判断一次
     graph.add_conditional_edges(
