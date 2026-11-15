@@ -4,6 +4,8 @@ LangGraph 节点：
 输入 state，返回要更新的字段。
 """
 import asyncio
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.memory import working,episodic
@@ -292,31 +294,78 @@ RETRYABLE = (
     OSError,
 )
 
-TOOL_RETRY_TIMES = 2
 TOOL_RETRY_BASE_DELAY = 0.25  # 秒，指数退避：0.25 → 0.5
 
 
-async def _invoke_with_retry(tool, name: str, args: dict):
-    """带退避重试地调用工具。
+@dataclass(frozen=True)
+class ToolPolicy:
+    """单个工具的超时与重试策略。
 
-    重试次数很少（2 次）是刻意的：工具调用在用户等待的主链路上，
-    多一次重试就多 250~500ms。宁可快速失败让模型改口，也不要让用户干等。
+    为什么按工具分级，而不是一刀切重试 2 次：
+        工具都在用户等待的主链路上，重试的每一秒都是用户盯着空白。
+        而不同工具的"失败"含义完全不同 —— `get_time` 是纯内存计算，
+        它失败基本等于进程坏了，重试毫无意义；`search_memories` 要跑
+        embedding + 向量检索，慢一秒是常态、偶发超时值得再试一次。
     """
+
+    timeout: float = 4.0   # 单次调用超时（秒）
+    retries: int = 2       # 失败后最多再试几次
+
+
+TOOL_POLICIES: dict[str, ToolPolicy] = {
+    # 纯内存/纯本地，失败就是真失败，重试只会浪费一次往返
+    "get_time": ToolPolicy(timeout=1.0, retries=0),
+    # 一次 DB 查询，偶发连接抖动值得再试一次
+    "get_town_status": ToolPolicy(timeout=3.0, retries=1),
+    # 要调 embedding + 向量检索，最慢的两个
+    "search_memories": ToolPolicy(timeout=4.0, retries=1),
+    "search_docs": ToolPolicy(timeout=4.0, retries=1),
+}
+# 未登记的工具走默认策略（新加工具忘了登记也不会变成"永不重试"）
+DEFAULT_POLICY = ToolPolicy()
+
+# 一次工具调用（含所有重试与退避）的总预算。
+# 超过就直接放弃，把错误当观察结果回填给模型 —— 让模型自己换方案，
+# 比让用户在空白屏幕前等第 3 次重试更划算。
+TOOL_BUDGET_SECONDS = 8.0
+
+
+async def _invoke_with_retry(tool, name: str, args: dict):
+    """按工具策略调用：单次超时 + 有限重试 + 总预算封顶。
+
+    三层限制的目的都是同一个：**最坏情况可预测**。
+    没有超时，一个卡住的请求能把整轮对话拖到 30 秒；
+    没有预算，重试叠加重试会让延迟翻几倍。
+    """
+    policy = TOOL_POLICIES.get(name, DEFAULT_POLICY)
+    started = time.perf_counter()
     last_exc: Exception | None = None
 
-    for attempt in range(TOOL_RETRY_TIMES + 1):
+    for attempt in range(policy.retries + 1):
         try:
-            return await tool.ainvoke(args)
+            return await asyncio.wait_for(tool.ainvoke(args), timeout=policy.timeout)
         except RETRYABLE as exc:
             last_exc = exc
-            if attempt >= TOOL_RETRY_TIMES:
+            elapsed = time.perf_counter() - started
+            if attempt >= policy.retries:
                 break
+
             delay = TOOL_RETRY_BASE_DELAY * (2**attempt)
+            if elapsed + delay > TOOL_BUDGET_SECONDS:
+                log.warning(
+                    "tool_retry_budget_exhausted",
+                    tool=name,
+                    elapsed=round(elapsed, 2),
+                    budget=TOOL_BUDGET_SECONDS,
+                )
+                break
+
             log.info(
                 "tool_retry",
                 tool=name,
                 attempt=attempt + 1,
                 delay=delay,
+                elapsed=round(elapsed, 2),
                 error=type(exc).__name__,
             )
             await asyncio.sleep(delay)

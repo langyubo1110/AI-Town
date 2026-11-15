@@ -36,18 +36,56 @@ def _no_delay(monkeypatch):
 def test_retries_then_succeeds():
     tool = FlakyTool(fail_times=2)
     assert asyncio.run(nodes._invoke_with_retry(tool, "t", {})) == "ok"
-    assert tool.calls == 3  # 1 次原始 + 2 次重试
+    assert tool.calls == 3  # 1 次原始 + 2 次重试（未登记的工具走默认策略）
 
 
 def test_gives_up_after_limit():
     tool = FlakyTool(fail_times=99)
     with pytest.raises(TimeoutError):
         asyncio.run(nodes._invoke_with_retry(tool, "t", {}))
-    assert tool.calls == nodes.TOOL_RETRY_TIMES + 1
+    assert tool.calls == nodes.DEFAULT_POLICY.retries + 1
 
 
 def test_non_retryable_fails_fast():
     tool = FlakyTool(fail_times=99, exc=ValueError)
     with pytest.raises(ValueError):
+        asyncio.run(nodes._invoke_with_retry(tool, "t", {}))
+    assert tool.calls == 1
+
+
+def test_local_tool_does_not_retry():
+    """get_time 是纯内存，失败就是真失败 —— 重试一次都不给。"""
+    tool = FlakyTool(fail_times=99)
+    with pytest.raises(TimeoutError):
+        asyncio.run(nodes._invoke_with_retry(tool, "get_time", {}))
+    assert tool.calls == 1
+
+
+def test_per_attempt_timeout(monkeypatch):
+    """单次超时生效：卡住的调用会被 wait_for 掐断，然后按策略重试一次。"""
+
+    class SlowTool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, args: dict):
+            self.calls += 1
+            await asyncio.sleep(0.2)
+            return "ok"
+
+    monkeypatch.setitem(
+        nodes.TOOL_POLICIES, "slow_tool", nodes.ToolPolicy(timeout=0.02, retries=1)
+    )
+    tool = SlowTool()
+    with pytest.raises(TimeoutError):
+        asyncio.run(nodes._invoke_with_retry(tool, "slow_tool", {}))
+    assert tool.calls == 2  # 首次 + 1 次重试
+
+
+def test_budget_stops_retries(monkeypatch):
+    """总预算用完就不再重试，避免最坏情况失控。"""
+    monkeypatch.setattr(nodes, "TOOL_BUDGET_SECONDS", 0.0)
+    tool = FlakyTool(fail_times=99)
+    with pytest.raises(TimeoutError):
         asyncio.run(nodes._invoke_with_retry(tool, "t", {}))
     assert tool.calls == 1
