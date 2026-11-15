@@ -1,0 +1,166 @@
+{
+  "cases": 10,
+  "valid_rate": 1.0,
+  "llm_used": 8,
+  "fallback_used": 2,
+  "details": [
+    {
+      "now": "09:05",
+      "goals": [
+        "整理需求文档",
+        "重构调度器"
+      ],
+      "window": "09:15~18:00",
+      "result": [
+        "09:15",
+        "10:00"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 45
+    },
+    {
+      "now": "10:30",
+      "goals": [
+        "code review PR",
+        "写单测",
+        "对齐接口"
+      ],
+      "window": "10:40~18:00",
+      "result": [
+        "10:40",
+        "11:40",
+        "14:00"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 60
+    },
+    {
+      "now": "11:40",
+      "goals": [
+        "吃午饭",
+        "复盘昨天的故障"
+      ],
+      "window": "11:50~18:00",
+      "result": [
+        "12:00",
+        "13:00"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 60
+    },
+    {
+      "now": "14:00",
+      "goals": [
+        "评审新版原型",
+        "更新排期",
+        "和测试对齐用例"
+      ],
+      "window": "14:10~18:00",
+      "result": [
+        "14:10",
+        "15:00",
+        "16:00"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 50
+    },
+    {
+      "now": "15:30",
+      "goals": [
+        "精修登录页视觉稿"
+      ],
+      "window": "15:40~18:00",
+      "result": [
+        "15:40"
+      ],
+      "problems": [],
+      "used_fallback": true,
+      "min_gap_minutes": -1
+    },
+    {
+      "now": "16:20",
+      "goals": [
+        "发版本",
+        "写发布说明"
+      ],
+      "window": "16:30~18:00",
+      "result": [
+        "16:30",
+        "17:00"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 30
+    },
+    {
+      "now": "17:40",
+      "goals": [
+        "收尾",
+        "整理明天的待办"
+      ],
+      "window": "17:50~18:00",
+      "result": [
+        "17:50",
+        "17:55"
+      ],
+      "problems": [],
+      "used_fallback": true,
+      "min_gap_minutes": 5
+    },
+    {
+      "now": "19:10",
+      "goals": [
+        "补看今天的告警",
+        "喝杯咖啡"
+      ],
+      "window": "19:20~22:00",
+      "result": [
+        "19:20",
+        "19:45"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 25
+    },
+    {
+      "now": "09:00",
+      "goals": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e"
+      ],
+      "window": "09:10~18:00",
+      "result": [
+        "09:10",
+        "09:40",
+        "10:10",
+        "10:40",
+        "11:10"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 30
+    },
+    {
+      "now": "12:50",
+      "goals": [
+        "把多智能体调度模块的消息队列换成 Stream",
+        "补调度器的超时重试"
+      ],
+      "window": "13:00~18:00",
+      "result": [
+        "13:00",
+        "14:30"
+      ],
+      "problems": [],
+      "used_fallback": false,
+      "min_gap_minutes": 90
+    }
+  ]
+}

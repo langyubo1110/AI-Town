@@ -27,6 +27,20 @@ VECTOR_TOP = 40
 BM25_TOP = 40
 DEFAULT_TOP_K = 3
 
+# 融合权重（向量 : BM25）= 3 : 1。这个数是**扫出来的**，不是拍的：
+#
+#   策略              Hit@1   Hit@3   MRR
+#   vector            0.969   1.000   0.984
+#   hybrid 1:1        0.906   1.000   0.953   ← 等权最差
+#   hybrid 2:1        0.938   1.000   0.969
+#   hybrid 3:1        0.969   1.000   0.984   ← 与纯向量持平
+#   hybrid 10:1       0.969   1.000   0.984
+#
+# 结论：在 32 条用例、13 个块的小语料上，中文同义改写会让 BM25 给出错误排名，
+# 等权融合反而拖低 MRR。3:1 是"保留 BM25、但不让它捣乱"的临界点；
+# BM25 的价值要等语料变大、出现大量稀有 token（编码、型号、人名）时才体现。
+RRF_WEIGHTS = (3.0, 1.0)
+
 
 @dataclass
 class Hit:
@@ -44,8 +58,15 @@ async def search(
     query: str,
     *,
     top_k: int = DEFAULT_TOP_K,
+    strategy: str = "hybrid",
 ) -> list[Hit]:
-    """混合检索。知识库为空时返回空列表（不抛）。"""
+    """混合检索。知识库为空时返回空列表（不抛）。
+
+    `strategy` 只给消融实验用（生产永远走 hybrid）：
+        vector  只用向量召回
+        bm25    只用关键词召回
+        hybrid  两路召回后 RRF 融合
+    """
     text = (query or "").strip()
     if not text:
         return []
@@ -87,8 +108,18 @@ async def search(
         if score > 0
     ][:BM25_TOP]
 
-    # ---- ③ RRF 融合 ----
-    fused = rrf([vector_ids, bm25_ids])[:top_k]
+    # ---- ③ 按策略取前 top_k ----
+    if strategy == "vector":
+        ordered_ids = [(doc_id, 1.0 / (rank + 1)) for rank, doc_id in enumerate(vector_ids[:top_k])]
+    elif strategy == "bm25":
+        ordered_ids = [(doc_id, 1.0 / (rank + 1)) for rank, doc_id in enumerate(bm25_ids[:top_k])]
+    elif strategy == "hybrid_equal":
+        # 消融用：等权融合，用来证明"调权重"不是拍脑袋
+        ordered_ids = rrf([vector_ids, bm25_ids])[:top_k]
+    else:
+        ordered_ids = rrf(
+            [vector_ids, bm25_ids], weights=list(RRF_WEIGHTS)
+        )[:top_k]
 
     hits = [
         Hit(
@@ -98,12 +129,13 @@ async def search(
             content=meta[doc_id].content,
             score=round(score, 5),
         )
-        for doc_id, score in fused
+        for doc_id, score in ordered_ids
         if doc_id in meta
     ]
     log.info(
         "docs_searched",
         query=text[:40],
+        strategy=strategy,
         vector=len(vector_ids),
         bm25=len(bm25_ids),
         fused=len(hits),

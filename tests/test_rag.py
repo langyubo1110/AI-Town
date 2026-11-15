@@ -103,3 +103,22 @@ def test_rrf_keeps_every_candidate():
 
 def test_rrf_empty_lists():
     assert rrf([[], []]) == []
+
+
+def test_rrf_weights_shift_ranking():
+    """给第一路更高权重后，它的第二名能压过第二路的第一名。
+
+    这正是"向量 3 : BM25 1"的效果：不让 BM25 的头名轻易翻盘。
+    """
+    first = [10, 11]
+    second = [20]
+
+    equal = dict(rrf([first, second]))
+    weighted = dict(rrf([first, second], weights=[3.0, 1.0]))
+
+    assert equal[20] > equal[11]        # 等权：第二路第一名压过第一路第二名
+    assert weighted[11] > weighted[20]  # 加权：反过来了
+
+
+def test_rrf_default_weights_equal_unweighted():
+    assert rrf([[1, 2], [2, 1]]) == rrf([[1, 2], [2, 1]], weights=[1.0, 1.0])

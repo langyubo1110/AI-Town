@@ -13,18 +13,33 @@
 DEFAULT_K = 60
 
 
-def rrf(ranked_lists: list[list[int]], *, k: int = DEFAULT_K) -> list[tuple[int, float]]:
+def rrf(
+    ranked_lists: list[list[int]],
+    *,
+    k: int = DEFAULT_K,
+    weights: list[float] | None = None,
+) -> list[tuple[int, float]]:
     """把若干个「已排序的 id 列表」融合成一个带分的列表。
 
     参数：
         ranked_lists  例如 [[3, 1, 7], [7, 3, 9]] —— 两路检索的结果
         k             平滑常数，越大越扁平
+        weights       每路的权重，默认全 1。
+
+    为什么需要 weights：
+        等权融合假设"两路一样可靠"。实测在中文语料上并不成立 ——
+        问"半夜系统挂了谁负责盯着"，BM25 会排到第 3（字面几乎没有重叠），
+        而向量排第 1。等权 RRF 会把这条坏排名抬进前 2，反而拖低整体。
+        给向量更高权重（2:1）后，才真正实现"以向量为主、BM25 补刀"。
 
     返回：[(id, score), ...]，按分数从高到低。
     """
+    if weights is None:
+        weights = [1.0] * len(ranked_lists)
+
     scores: dict[int, float] = {}
-    for ranked in ranked_lists:
+    for ranked, weight in zip(ranked_lists, weights, strict=True):
         for rank, doc_id in enumerate(ranked):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+            scores[doc_id] = scores.get(doc_id, 0.0) + weight / (k + rank + 1)
 
     return sorted(scores.items(), key=lambda item: item[1], reverse=True)
