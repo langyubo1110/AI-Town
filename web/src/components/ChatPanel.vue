@@ -239,25 +239,40 @@ function onKeydown(event: KeyboardEvent) {
 .head {
   display: flex;
   align-items: center;
+  /* 允许换行：三列布局里这一栏只有 ~344px，名字+职位+房间+好感度挤不下 */
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 12px;
+  gap: 6px 12px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
 }
-.who { display: flex; align-items: baseline; gap: 8px; }
-.who strong { font-size: 15px; }
+.who {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.who strong { font-size: 15px; white-space: nowrap; }
 .badge {
   font-size: 11px;
   color: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 999px;
   padding: 0 7px;
+  white-space: nowrap;
 }
-.loc { font-size: 12px; color: var(--muted); }
+.loc { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
-.affinity { display: flex; align-items: center; gap: 8px; }
+/* 好感度独占一行，进度条自动伸缩，不再把名字挤成竖排 */
+.affinity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 0 100%;
+}
 .bar {
-  width: 110px;
+  flex: 1 1 auto;
   height: 6px;
   border-radius: 999px;
   background: #22262f;

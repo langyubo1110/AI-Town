@@ -334,6 +334,23 @@ export class TownScene {
 
   // ---------------- 相机 ----------------
 
+  /**
+   * 手动同步画布尺寸。
+   *
+   * 为什么需要它：PixiJS 的 `resizeTo: host` 只监听 **window resize**，
+   * 而"布局变化但不改窗口大小"（计划面板加载完把画布撑高、三列/两列切换、
+   * 侧栏滚动条出现）它完全感知不到 —— 渲染器会一直用旧尺寸，
+   * 世界于是被画偏、留出大片空白。所以由组件里的 ResizeObserver 调这里。
+   */
+  resize(width: number, height: number): void {
+    if (this.destroyed || !this.ready) return
+    if (width <= 0 || height <= 0) return
+    const { width: curW, height: curH } = this.app.screen
+    if (Math.abs(curW - width) < 1 && Math.abs(curH - height) < 1) return
+    this.app.renderer.resize(width, height)
+    this.updateCamera()
+  }
+
   private updateCamera(): void {
     const { width, height } = this.app.screen
     if (width <= 0 || height <= 0) return

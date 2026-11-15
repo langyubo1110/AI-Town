@@ -11,6 +11,7 @@ const emit = defineEmits<{
 
 const host = ref<HTMLDivElement | null>(null)
 let scene: TownScene | null = null
+let observer: ResizeObserver | null = null
 
 onMounted(async () => {
   if (!host.value) return
@@ -21,6 +22,17 @@ onMounted(async () => {
   try {
     await scene.mount(host.value)
     scene.setNpcs(props.npcs)
+
+    // PixiJS 的 resizeTo 只跟 window resize；布局变化（栅格列数切换、
+    // 计划面板加载后把画布撑高）它感知不到，画布会用着旧尺寸把世界画偏。
+    // 用 ResizeObserver 盯住真实尺寸，变化就同步过去。
+    observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect
+      if (rect && rect.width > 0 && rect.height > 0) {
+        scene?.resize(rect.width, rect.height)
+      }
+    })
+    observer.observe(host.value)
   } catch (err) {
     // 场景初始化失败不能让页面静默白屏——把原因打出来
     console.error('[TownCanvas] 场景初始化失败：', err)
@@ -33,6 +45,8 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  observer?.disconnect()
+  observer = null
   scene?.destroy()
   scene = null
 })

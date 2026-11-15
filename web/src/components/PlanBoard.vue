@@ -238,6 +238,12 @@ li.missed .badge { color: #f87171; border: 1px solid #5a2a2a; }
   border-left: 2px solid #2c3b55;
 }
 
+/* 窄屏给计划列的高度不够：三张卡 + 反思入口会溢出 85px，把最后一张切掉。
+   反思属于"展开才知道"的次要信息，先藏起来；宽屏（三列）照常显示。 */
+@media (max-width: 1439px) {
+  .thoughts { display: none; }
+}
+
 .empty { font-size: 11px; color: var(--muted); line-height: 1.5; }
 .muted { color: var(--muted); font-size: 13px; }
 
