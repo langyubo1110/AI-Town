@@ -11,6 +11,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import talk
@@ -90,9 +91,17 @@ async def handle_npc_chat(
         event_type="npc_dialogue",
         summary=summary,
         payload=event_payload,
+        # 幂等键取 Stream 的消息 id：同一条消息重投时，第二次 INSERT 会被唯一索引挡住
+        dedupe_key=f"npc_chat:{msg_id}",
     )
-    # flush 才会真的 INSERT（拿到自增 id），但事务还没提交
-    await session.flush()
+    try:
+        # flush 才会真的 INSERT（拿到自增 id），但事务还没提交
+        await session.flush()
+    except IntegrityError:
+        # 这条消息之前已经处理过了（至少一次语义下的正常情况），不是错误
+        await session.rollback()
+        log.info("event_duplicated", evt="npc_dialogue", msg_id=msg_id)
+        return []
 
     log.info(
         "npc_dialogue_done",

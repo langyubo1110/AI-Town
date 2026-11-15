@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.agents import plans, reflection
 from app.core.clock import local_now
@@ -144,8 +145,26 @@ async def _advance_one_plan(redis: Redis, session_factory, now: datetime) -> dic
                         "room": step["room"],
                         "trigger": "plan",
                     },
+                    # 幂等键：一个 NPC 一天里的同一个时间点只会有一条计划事件
+                    dedupe_key=f"plan:{npc.id}:{now.date()}:{step['at']}",
                 )
-                await session.flush()
+                try:
+                    await session.flush()
+                except IntegrityError:
+                    # 这一步之前执行过（比如上次 commit 成功后崩在"保存计划"之前），
+                    # 事件已经存在 → 跳过写入，但位置和勾掉状态继续推进
+                    npc_id_value = npc.id
+                    await session.rollback()
+                    created = None
+                    fresh = await session.get(NPC, npc_id_value)
+                    if fresh is not None:
+                        fresh.location = step["room"]
+                    log.info(
+                        "event_duplicated",
+                        evt=PLAN_EVENT,
+                        npc=npc.name,
+                        at=step["at"],
+                    )
             else:
                 # 没有玩家就没有事件归属者（events.player_id 是 NOT NULL），
                 # 但位置和计划照常推进 —— 页面靠 /api/town/plans 轮询也能看到。

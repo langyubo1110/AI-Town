@@ -1,6 +1,6 @@
 """事件台账（append-only：只增不改）。"""
 
-from sqlalchemy import BigInteger, ForeignKey, Index, String, Text
+from sqlalchemy import BigInteger, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,7 +28,19 @@ class Event(Base, TimestampMixin):
     # 结构化细节：程序消费
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
+    # 幂等键：同一条消息被重复投递时，靠它挡住第二次写入。
+    # Redis Stream 是"至少一次"语义 —— worker 崩了会把 pending 的消息重投，
+    # 没有这个键就会写两条一模一样的事件（用户看到两条"张三和李四聊了聊"）。
+    dedupe_key: Mapped[str | None] = mapped_column(String(96), nullable=True)
+
     # 索引要匹配查询模式：WHERE player_id=? ORDER BY id DESC
     __table_args__ = (
         Index("ix_events_player_id_id", "player_id", "id"),
+        # 部分唯一索引：只约束"有幂等键"的行，历史数据（NULL）不受影响
+        Index(
+            "uq_events_dedupe_key",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("dedupe_key IS NOT NULL"),
+        ),
     )

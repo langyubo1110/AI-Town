@@ -13,6 +13,7 @@ async def create(
     event_type: str,
     summary: str,
     payload: dict,
+    dedupe_key: str | None = None,
 ) -> Event:
     event = Event(
         player_id=player_id,
@@ -20,6 +21,7 @@ async def create(
         event_type=event_type,
         summary=summary,
         payload=payload,
+        dedupe_key=dedupe_key,
     )
     #加入session待提交队列
     session.add(event)

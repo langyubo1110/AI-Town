@@ -328,7 +328,25 @@ ticker ──XADD──→ Stream(aitown:events) ──XREADGROUP──→ consu
 | ①③②（先 ack 后推） | publish 失败 | 消息已 ack，**永远不会重试** |
 
 **至少一次语义**：worker 崩在 commit 之后、ACK 之前 → 消息留在 pending →
-重启时 `XREADGROUP ... "0"` 把 pending 重做一遍。**代价是可能重复写一条事件（没有幂等键）。**
+重启时 `XREADGROUP ... "0"` 把 pending 重做一遍。**代价是可能重复写一条事件。**
+
+**怎么挡住重复写**（`events.dedupe_key`）：
+
+```
+消息的 Redis Stream id  →  dedupe_key = "npc_chat:{msg_id}"
+                          （计划事件用 "plan:{npc_id}:{日期}:{时刻}"）
+        ↓
+INSERT 时撞上部分唯一索引 uq_events_dedupe_key  →  session.rollback()
+        ↓
+不广播、不报错，直接 ACK  —— 这是"至少一次"语义下的正常情况
+```
+
+用**部分**唯一索引（`WHERE dedupe_key IS NOT NULL`）而不是普通唯一索引：
+历史数据没有这个键（NULL），普通唯一索引会让多行 NULL 互相冲突。
+
+**队列裁剪**：`publish()` 里 `XADD ... MAXLEN ~ 10000`。worker 只消费新消息，
+老消息留着没有任何用处却会一直吃内存。用 `~` 做近似裁剪，Redis 按整个宏节点丢弃，
+比精确裁剪快得多（实测 maxlen=50 时留下 100 条，可接受）。
 
 **另外三个保护**：
 
@@ -621,9 +639,9 @@ POST /api/chat/stream      （EventSource 发不了 POST，所以是 fetch + Rea
 | 对话历史只在前端内存 | 后端没有会话历史接口 | 加 `turns` 表 |
 | 无认证 | `player_id` 从 query 传，可伪造 | 握手校验 token |
 | worker 吞吐 = 1 | 单进程串行处理 | 多副本（消费组分摊）或进程内并发 |
-| at-least-once 无幂等键 | 重试可能写两条事件 | 幂等键或唯一约束 |
+| at-least-once 无幂等键 | 重试可能写两条事件 | ✅ 已做：`events.dedupe_key` + 部分唯一索引 |
 | 1 个 WS = 1 条 Redis 连接 | 订阅状态是连接级的 | 独立连接池 / SSE 网关 |
-| Stream 未裁剪 | `publish` 没加 `maxlen` | `XADD MAXLEN ~ 10000` |
+| Stream 未裁剪 | `publish` 没加 `maxlen` | ✅ 已做：`XADD MAXLEN ~ 10000` |
 
 ---
 
@@ -710,9 +728,9 @@ NPC 有当日计划、会自己互动，整条链路有评测和链路追踪。
 | 三因子权重怎么定的？ | 消融实验，被否掉三轮；0.3 的 recency 会把 Hit@5 打到 0.364 |
 | 怎么防 Agent 死循环？ | 迭代上限 3，到上限**收回工具**（不是路由拦截，那会留空回复） |
 | 工具失败怎么办？ | 异常当 observation 回填，模型自己改口 |
-| 消息重复消费怎么办？ | 现在 at-least-once（已知限制），修法是幂等键 |
-| 3.5 秒延迟怎么优化？ | `analyze_turn` 与 `generate_reply` 并行、embedding 批量、流式返回 |
-| 你做过 Agent 吗？ | 编排 + 多智能体 + 记忆 + 工具调用 + 规划(Planning)，缺 Reflection |
+| 消息重复消费怎么办？ | Stream 是至少一次；用 `events.dedupe_key`（部分唯一索引）挡重复，实测同一 msg_id 处理两次只落一条 |
+| 3.5 秒延迟怎么优化？ | 已经做了流式（首字 1.3~2.5s）；还能做的：`analyze_turn` 与回复并行、embedding 批量 |
+| 你做过 Agent 吗？ | 编排 + 多智能体 + 记忆 + 工具调用 + 规划（含目标/反思/重规划）+ 文档 RAG |
 
 ---
 
