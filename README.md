@@ -1045,7 +1045,7 @@ ai-town/
 │   ├── api/                    deps / schemas / routes
 │   └── worker/                 streams / handlers / consumer / ticker
 ├── migrations/                 Alembic（4 个版本）
-├── scripts/                    seed / ingest_docs / try_* / probe_* / eval_* / make_diagrams
+├── scripts/                    seed / ingest_docs / eval_* / make_diagrams / probe_graph
 ├── data/eval/                  评测数据集
 ├── docs/                       评测报告 + images/（SVG 配图）+ kb/（知识库原文）
 ├── web/                        Vue3 + TS + Vite + PixiJS
