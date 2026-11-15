@@ -19,6 +19,11 @@ CONSUMER = os.getenv("WORKER_NAME") or f"worker-{socket.gethostname()}"
 
 BLOCK_MS = 5000      # 最长阻塞 5 秒，保证能响应退出信号
 BATCH = 10
+# 一次最多并行处理几条。
+# 原来是「一条一条串行」→ 一条对话要 3~5 秒，吞吐就是 1/4 秒；
+# 改成进程内并发后同样的机器能同时跑 4 条。
+# 不能开太大：每条消息占一个数据库连接 + 一次 LLM 调用，开太大会把连接池和配额打满。
+CONCURRENCY = int(os.getenv("WORKER_CONCURRENCY", "4"))
 
 
 async def handle(session, *, event: str, payload: dict, msg_id: str) -> list[Broadcast]:
@@ -57,6 +62,38 @@ async def _process(redis: Redis, session_factory, msg_id: str, fields: dict[str,
 
     await redis.xack(STREAM, GROUP, msg_id)
     log.debug("message_acked", msg_id=msg_id)
+
+
+async def _process_batch(
+    redis: Redis, session_factory, messages: list[tuple[str, dict[str, str]]]
+) -> None:
+    """并发处理一批消息，最多 CONCURRENCY 条同时在飞。
+
+    每条消息仍然是「一个 session = 一个事务」，互不影响；
+    ACK 也在各自的 _process 里完成，所以某条失败不会拖累同批的其它条
+    （失败的那条不 ACK，留在 pending 等下次重做）。
+    """
+    if not messages:
+        return
+
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+
+    async def one(msg_id: str, fields: dict[str, str]) -> None:
+        async with semaphore:
+            try:
+                await _process(redis, session_factory, msg_id, fields)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # 兜底：连"错误处理"都出错时，worker 也不能死
+                log.error(
+                    "process_crashed",
+                    msg_id=msg_id,
+                    error=type(exc).__name__,
+                    detail=str(exc)[:300],
+                )
+
+    await asyncio.gather(*(one(msg_id, fields) for msg_id, fields in messages))
 
 
 async def _recover_pending(redis: Redis, session_factory) -> int:
@@ -98,16 +135,4 @@ async def run(redis: Redis, session_factory) -> None:
             continue
 
         for _stream, messages in resp:
-            for msg_id, fields in messages:
-                try:
-                    await _process(redis, session_factory, msg_id, fields)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    # 兜底：连"错误处理"都出错时，worker 也不能死
-                    log.error(
-                        "process_crashed",
-                        msg_id=msg_id,
-                        error=type(exc).__name__,
-                        detail=str(exc)[:300],
-                    )
+            await _process_batch(redis, session_factory, messages)

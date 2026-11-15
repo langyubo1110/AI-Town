@@ -8,7 +8,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, npc,chat,event,town,ws
+from app.api.routes import health, npc,chat,event,town,ws,session
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.infra.cache import build_redis
@@ -71,6 +71,7 @@ app.add_middleware(
 
 #挂载路由
 app.include_router(health.router)
+app.include_router(session.router, prefix="/api")
 app.include_router(npc.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(event.router, prefix="/api")

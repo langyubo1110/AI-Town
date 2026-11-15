@@ -3,6 +3,7 @@ LangGraph 节点：
 每个节点是一个 async 函数，
 输入 state，返回要更新的字段。
 """
+import asyncio
 from datetime import UTC, datetime
 
 from app.memory import working,episodic
@@ -265,7 +266,7 @@ async def tool_node(state: ChatState, config: RunnableConfig) -> dict:
             continue
         try:
             #有则直接执行对应工具
-            result = await tool.ainvoke(call.get("args") or {})
+            result = await _invoke_with_retry(tool, name, call.get("args") or {})
             trace.append({"call": call, "result": str(result), "error": None})
             log.info("tool_called", tool=name, args=call.get("args"), ok=True)
         except Exception as exc:
@@ -281,6 +282,48 @@ async def tool_node(state: ChatState, config: RunnableConfig) -> dict:
             )
     #返回执行的工具记录，清空待执行列表
     return {"tool_trace": trace, "tool_calls": []}
+
+# 只有"再试一次可能就好了"的错误才重试：
+#   网络抖动、连接重置、数据库短暂不可用、向量库超时。
+# 参数错、查到 0 条这类重试一万次也一样，重试只会拖慢回复。
+RETRYABLE = (
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
+
+TOOL_RETRY_TIMES = 2
+TOOL_RETRY_BASE_DELAY = 0.25  # 秒，指数退避：0.25 → 0.5
+
+
+async def _invoke_with_retry(tool, name: str, args: dict):
+    """带退避重试地调用工具。
+
+    重试次数很少（2 次）是刻意的：工具调用在用户等待的主链路上，
+    多一次重试就多 250~500ms。宁可快速失败让模型改口，也不要让用户干等。
+    """
+    last_exc: Exception | None = None
+
+    for attempt in range(TOOL_RETRY_TIMES + 1):
+        try:
+            return await tool.ainvoke(args)
+        except RETRYABLE as exc:
+            last_exc = exc
+            if attempt >= TOOL_RETRY_TIMES:
+                break
+            delay = TOOL_RETRY_BASE_DELAY * (2**attempt)
+            log.info(
+                "tool_retry",
+                tool=name,
+                attempt=attempt + 1,
+                delay=delay,
+                error=type(exc).__name__,
+            )
+            await asyncio.sleep(delay)
+
+    assert last_exc is not None
+    raise last_exc
+
 
 async def analyze_turn(state: ChatState) -> dict:
     """一次 LLM 调用：好感度变化 + 记忆重要性 + 事实抽取。"""

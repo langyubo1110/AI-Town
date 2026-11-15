@@ -6,6 +6,7 @@ import EventFeed from '@/components/EventFeed.vue'
 import PlanBoard from '@/components/PlanBoard.vue'
 import { fetchNpcs } from '@/api/npc'
 import { fetchPlans } from '@/api/town'
+import { createSession } from '@/api/session'
 import { ApiError } from '@/api/http'
 import type { ChatOut, Npc, NpcPlan, TownEvent } from '@/types/api'
 
@@ -30,7 +31,20 @@ watch(playerName, (name) => {
   localStorage.setItem(STORAGE_KEY, name)
   // 换名字等于换玩家：旧的事件流不再属于他
   playerId.value = null
+  void ensureSession()
 })
+
+/** 和服务端握手，拿到签名 Cookie 后再谈"我是谁"。
+ *  失败不阻塞页面：接口还有 query 回退，只是服务端会记一条 identity_unsigned。
+ */
+async function ensureSession(): Promise<void> {
+  try {
+    const session = await createSession(playerName.value)
+    playerId.value = session.player_id
+  } catch {
+    /* 静默失败：不影响看小镇 */
+  }
+}
 
 /** 位置没变就不替换数组：TownCanvas 的 watch 会重建全部精灵，
  *  每 30 秒重建一次画面会闪。
@@ -97,6 +111,8 @@ function onPlanSelect(npcId: number) {
 let pollTimer: ReturnType<typeof setInterval> | undefined
 
 onMounted(async () => {
+  // 先握手拿身份 Cookie，再拉数据：后面的请求就都带签名身份了
+  await ensureSession()
   await loadNpcs()
   loadPlans()
   pollTimer = setInterval(() => {

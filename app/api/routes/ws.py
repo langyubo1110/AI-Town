@@ -12,6 +12,7 @@ import contextlib
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.core.logging import get_logger
+from app.core.security import COOKIE_NAME, verify_player
 from app.infra.broadcast import channel_for
 
 log = get_logger(__name__)
@@ -34,7 +35,18 @@ async def _watch(websocket: WebSocket) -> None:
 
 
 @router.websocket("/ws/events")
-async def ws_events(websocket: WebSocket, player_id: int = Query(..., ge=1)) -> None:
+async def ws_events(websocket: WebSocket, player_id: int | None = Query(None, ge=1)) -> None:
+    # 身份优先取签名 Cookie；没有才用 query（兼容老前端 / 直连脚本）
+    raw = websocket.cookies.get(COOKIE_NAME)
+    resolved = verify_player(raw) if raw else None
+    if resolved is None:
+        resolved = player_id
+    if resolved is None:
+        # 1008 = policy violation：没身份就不给订阅
+        await websocket.close(code=1008)
+        return
+    player_id = resolved
+
     await websocket.accept()
 
     # pubsub 会从连接池里借一条【独占】连接，订阅期间不能被别的命令复用

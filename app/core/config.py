@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # ---- 身份令牌签名密钥 ----
+    # 玩家身份放在 HttpOnly Cookie 里，值 = "{player_id}.{HMAC-SHA256 前 32 位}"。
+    # 生产必须用 APP_SECRET 覆盖：默认值公开在仓库里，等于没有签名。
+    app_secret: str = "dev-only-change-me"
+
     
 
     #方法返回值作为类的属性 可以访问

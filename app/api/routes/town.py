@@ -1,6 +1,6 @@
 """小镇事件：让 NPC 之间互动（异步），以及查看 NPC 的今日计划。"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from app.api.schemas.town import (
     PlanStepOut,
 )
 from app.core.clock import local_now
+from app.core.security import COOKIE_NAME, verify_player
 from app.domain import plans as plan_rules
 from app.memory import episodic
 from app.models import Player
@@ -31,6 +32,7 @@ router = APIRouter(prefix="/town", tags=["town"])
 )
 async def npc_chat(
     payload: NpcChatIn,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ) -> NpcChatAccepted:
@@ -45,6 +47,11 @@ async def npc_chat(
 
     if await session.get(Player, payload.player_id) is None:
         raise HTTPException(status_code=404, detail=f"玩家 {payload.player_id} 不存在")
+
+    # 拿着 Cookie 却不能替别人触发（防越权）；没有 Cookie 的脚本调用保持兼容
+    cookie_id = verify_player(request.cookies.get(COOKIE_NAME))
+    if cookie_id is not None and cookie_id != payload.player_id:
+        raise HTTPException(status_code=403, detail="不能以其他玩家的身份触发对话")
 
     # —— 异步执行：投一条消息就返回 ——
     task_id = await publish(
