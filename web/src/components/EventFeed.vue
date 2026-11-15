@@ -184,27 +184,22 @@ function linesOf(event: TownEvent): { speaker: string; text: string }[] {
   list-style: none;
   flex: 1;
   min-height: 0;
-  /* 横排：动态现在是底部通栏，竖排一屏只能看见一条 */
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 10px 14px;
+  /* 竖排：动态现在独占一列，竖排能一次看到多条、每条都读得完 */
+  overflow-y: auto;
+  padding: 12px 14px;
   display: flex;
-  flex-direction: row;
-  align-items: stretch;
+  flex-direction: column;
   gap: 10px;
   scrollbar-width: thin;
   scrollbar-color: #2d3340 transparent;
 }
-.list::-webkit-scrollbar { height: 6px; }
+.list::-webkit-scrollbar { width: 6px; }
 .list::-webkit-scrollbar-thumb {
   background: #2d3340;
   border-radius: 999px;
 }
 
 .item {
-  flex: 0 0 clamp(260px, 23vw, 340px);
-  min-height: 0;
-  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 9px 11px;

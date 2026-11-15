@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import TownCanvas from '@/components/TownCanvas.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
 import EventFeed from '@/components/EventFeed.vue'
-import PlanBoard from '@/components/PlanBoard.vue'
+import NpcStrip from '@/components/NpcStrip.vue'
 import { fetchNpcs } from '@/api/npc'
 import { fetchPlans } from '@/api/town'
 import { createSession } from '@/api/session'
@@ -23,6 +23,21 @@ const plans = ref<NpcPlan[]>([])
 const loading = ref(true)
 const error = ref('')
 const plansLoading = ref(false)
+
+/** 选中 NPC 的今日计划：传给对话面板，只有选中时才显示他的任务 */
+const selectedPlan = computed(
+  () => plans.value.find((plan) => plan.npc_id === selected.value?.id) ?? null,
+)
+
+/** 画布头顶浮标：选中的人在做什么（没选中就为空） */
+const selectedTask = computed(() => {
+  if (!selected.value) return null
+  const step = selectedPlan.value?.steps.find((item) => item.status === 'pending')
+  return {
+    id: selected.value.id,
+    text: step ? `现在 ${step.at} ${step.goal}` : '今天的安排都完成了',
+  }
+})
 const selected = ref<Npc | null>(null)
 const playerName = ref(localStorage.getItem(STORAGE_KEY) || '小明')
 const playerId = ref<number | null>(null)
@@ -153,32 +168,33 @@ onBeforeUnmount(() => clearInterval(pollTimer))
            左右分栏是为了把画布撑高 —— 上下堆叠时画布被压扁，
            世界的上下边缘会被裁掉。 -->
       <div class="stage">
-        <!-- 第一列：画布占满整列（上下两行都归它） -->
+        <!-- 左：画布（占满）+ 底部居民进度条 -->
         <section class="left">
-          <TownCanvas
-            :npcs="npcs"
-            @select="(npc) => (selected = npc)"
-            @request-chat="(npc) => (selected = npc)"
-          />
+          <div class="canvas-slot">
+            <TownCanvas
+              :npcs="npcs"
+              :selected-task="selectedTask"
+              @select="(npc) => (selected = npc)"
+              @request-chat="(npc) => (selected = npc)"
+            />
+          </div>
+          <NpcStrip :plans="plans" :selected-id="selected?.id ?? null" @select="onPlanSelect" />
         </section>
 
-        <!-- 第二列：今日计划 -->
-        <section class="mid">
-          <PlanBoard
-            :plans="plans"
-            :loading="plansLoading"
-            :selected-id="selected?.id ?? null"
-            @select="onPlanSelect"
-          />
-        </section>
-
-        <!-- 第三列：打招呼 -->
+        <!-- 中：对话（选中的人才有他的今日计划） -->
         <section class="side">
-          <ChatPanel :npc="selected" :player-name="playerName" @chatted="onChatted" />
+          <ChatPanel
+            :npc="selected"
+            :player-name="playerName"
+            :plan="selectedPlan"
+            @chatted="onChatted"
+          />
         </section>
 
-        <!-- 底部横排：小镇动态（横跨计划 + 打招呼两列，与画布下沿对齐） -->
-        <EventFeed class="feed-row" :player-id="playerId" @event="onTownEvent" />
+        <!-- 右：小镇动态 -->
+        <aside class="feed-slot">
+          <EventFeed :player-id="playerId" @event="onTownEvent" />
+        </aside>
       </div>
     </template>
   </main>
@@ -248,34 +264,31 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* 三列 + 一条横跨右侧两列的底部动态：
-       画布 | 计划 | 打招呼
-       画布 |   小镇动态（横排）
-     这样画布占满左边整列，右侧上沿与画布齐平、下沿也齐平。 */
-  grid-template-columns: minmax(0, 1fr) 320px 344px;
-  grid-template-rows: minmax(0, 1fr) 196px;
-  grid-template-areas:
-    "left mid side"
-    "left feed feed";
+  /* 三列：画布（大） | 对话 | 动态
+     计划不再独占一列 —— 三个 NPC × 4 步会占满一列还空一片，
+     玩家真正关心的是"谁在干什么"，所以收进画布下方的居民进度条，
+     选中谁、谁的计划才在对话面板里展开。 */
+  grid-template-columns: minmax(0, 1fr) 336px 352px;
+  grid-template-areas: "left side feed";
   gap: 12px;
 }
 
 .left {
   grid-area: left;
   display: flex;
+  flex-direction: column;
+  gap: 10px;
   min-width: 0;
   min-height: 0;
 }
 
-/* 计划独占一列：卡片高度不再被对话/动态挤 */
-.mid {
-  grid-area: mid;
-  display: flex;
-  flex-direction: column;
+/* 画布吃掉左列剩余高度；min-height:0 是关键，否则会被内容顶破 */
+.canvas-slot {
+  flex: 1 1 auto;
   min-height: 0;
+  display: flex;
 }
 
-/* 第三列只有打招呼（动态挪到底部通栏了） */
 .side {
   grid-area: side;
   display: flex;
@@ -283,21 +296,19 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   min-height: 0;
 }
 
-/* 底部横排动态：跨 mid + side 两列 */
-.feed-row {
+.feed-slot {
   grid-area: feed;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
-/* 中等屏（1366 这类）：三列会把画布压得太窄，退回两列。
-   画布仍占满左边整列，右列自上而下是 计划 / 打招呼 / 动态（动态横排、只占右列宽度）。
-   1366×768 这一档装不下"四条都完整"，计划卡片允许内部滚动。 */
+/* 中等屏：画布仍占左侧整高，右列对话/动态上下分 */
 @media (max-width: 1439px) {
   .stage {
-    grid-template-columns: minmax(0, 1fr) 404px;
-    grid-template-rows: minmax(0, 1.75fr) minmax(0, 1fr) 130px;
+    grid-template-columns: minmax(0, 1fr) 396px;
+    grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr);
     grid-template-areas:
-      "left mid"
       "left side"
       "left feed";
   }
@@ -309,12 +320,11 @@ onBeforeUnmount(() => clearInterval(pollTimer))
   .stage {
     grid-template-columns: 1fr;
     grid-template-rows: none;
-    grid-template-areas: "left" "mid" "feed" "side";
+    grid-template-areas: "left" "side" "feed";
   }
-  .left { height: clamp(420px, 56vh, 620px); }
-  .mid { max-height: 520px; }
-  .feed-row { height: 200px; }
-  .side { height: 380px; }
+  .left { height: clamp(460px, 62vh, 680px); }
+  .side { height: 440px; }
+  .feed-slot { height: 340px; }
 }
 
 .hint { color: var(--muted); margin-top: 16px; }

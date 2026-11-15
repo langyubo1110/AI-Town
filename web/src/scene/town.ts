@@ -84,6 +84,10 @@ export class TownScene {
   private keys = new Set<string>()
   private nearbyId: number | null = null
 
+  /** 选中者头顶那张"当前任务"浮标（只有一个，跟着选中的人走） */
+  private taskBadge: Text | null = null
+  private taskTarget: Actor | null = null
+
   private destroyed = false
   private ready = false
 
@@ -151,6 +155,54 @@ export class TownScene {
     })
   }
 
+  /**
+   * 在选中的 NPC 头顶显示/隐藏"当前任务"浮标。
+   *
+   * 为什么用一张共享浮标而不是给每个 actor 各挂一个：
+   * 同一时刻只会选中一个人，建 N 个 Text 既费内存又要同步状态。
+   * 位置在 tick 里跟着 actor 更新。
+   */
+  setSelectedTask(npcId: number | null, text: string | null): void {
+    if (this.destroyed) return
+
+    const actor = npcId === null ? undefined : this.npcActors.get(npcId)
+    if (!actor || !text) {
+      if (this.taskBadge) this.taskBadge.visible = false
+      this.taskTarget = null
+      return
+    }
+
+    if (!this.taskBadge) {
+      const badge = new Text({
+        text,
+        style: {
+          fill: COLOR.text,
+          fontSize: 11,
+          fontFamily: FONT,
+          stroke: { color: '#0b0d12', width: 4 },
+        },
+      })
+      // 锚点改成"顶部"，挂在脚下：头顶已经挤了名字(-20)和"按 E 对话"(-38)，
+      // 再往上会顶出房间框、和房间名撞上（NPC 走动范围本来就贴着房间下沿）。
+      badge.anchor.set(0.5, 0)
+      this.npcLayer.addChild(badge)
+      this.taskBadge = badge
+    }
+
+    this.taskBadge.text = text
+    this.taskBadge.visible = true
+    this.taskTarget = actor
+    this.placeTaskBadge()
+  }
+
+  private placeTaskBadge(): void {
+    if (!this.taskBadge || !this.taskTarget || !this.taskBadge.visible) return
+    this.taskBadge.position.set(
+      this.taskTarget.root.position.x,
+      this.taskTarget.root.position.y + 10,
+    )
+  }
+
   destroy(): void {
     if (this.destroyed) return
     this.destroyed = true
@@ -208,6 +260,7 @@ export class TownScene {
     this.updateNearby()
     this.animate(dt)
     this.updateCamera()
+    this.placeTaskBadge()
   }
 
   private movePlayer(dt: number): void {

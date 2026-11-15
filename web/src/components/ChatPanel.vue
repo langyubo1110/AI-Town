@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { sendChat, sendChatStream } from '@/api/chat'
 import { ApiError } from '@/api/http'
-import type { ChatOut, Npc, ToolUsed } from '@/types/api'
+import type { ChatOut, Npc, NpcPlan, ToolUsed } from '@/types/api'
 
 interface Turn {
   role: 'user' | 'npc'
@@ -27,8 +27,22 @@ function toolLabel(tool: ToolUsed): string {
   return values.length ? `${label}(${values.join('、')})` : label
 }
 
-const props = defineProps<{ npc: Npc | null; playerName: string }>()
+const props = defineProps<{
+  npc: Npc | null
+  playerName: string
+  /** 选中 NPC 的今日计划：没有就不显示计划块 */
+  plan?: NpcPlan | null
+}>()
 const emit = defineEmits<{ chatted: [result: ChatOut] }>()
+
+/** 计划默认收起，只露"下一步做什么"；点「全部」才展开 4 步 */
+const showPlan = ref(false)
+
+/** 下一个还没做的步骤 */
+const nextStep = computed(() => {
+  const steps = props.plan?.steps ?? []
+  return steps.find((step) => step.status === 'pending') ?? null
+})
 
 /** 每个 NPC 各自保留一份对话，切换对象不串台 */
 const histories = ref<Record<number, Turn[]>>({})
@@ -185,6 +199,39 @@ function onKeydown(event: KeyboardEvent) {
       </div>
     </header>
 
+    <!-- 这个 NPC 的今日计划：只有选中他时才出现，平时不占地方 -->
+    <div v-if="npc && plan" class="planbox">
+      <div class="ph">
+        <span class="tag">今日计划</span>
+        <span class="cnt">{{ plan.done }}/{{ plan.total }}</span>
+        <button type="button" class="toggle" @click="showPlan = !showPlan">
+          {{ showPlan ? '收起' : '全部' }}
+        </button>
+      </div>
+      <p v-if="plan.weekly_goal" class="goal" :title="plan.weekly_goal">
+        目标 · {{ plan.weekly_goal }}
+      </p>
+      <p v-if="nextStep" class="nowstep">
+        <time>{{ nextStep.at }}</time>
+        <span class="g">{{ nextStep.goal }}</span>
+        <span class="rm">{{ nextStep.room }}</span>
+      </p>
+      <p v-else class="nowstep muted">今天的安排都完成了</p>
+
+      <ul v-if="showPlan" class="steps">
+        <li v-for="(step, i) in plan.steps" :key="i" :class="step.status">
+          <time>{{ step.at }}</time>
+          <span class="g">{{ step.goal }}</span>
+          <span class="rm">{{ step.room }}</span>
+        </li>
+      </ul>
+
+      <details v-if="plan.reflections.length" class="thoughts">
+        <summary>最近的思考</summary>
+        <p v-for="(text, i) in plan.reflections" :key="i">{{ text }}</p>
+      </details>
+    </div>
+
     <div ref="scrollBox" class="log">
       <p v-if="!npc" class="muted">还没选中任何人</p>
       <p v-else-if="turns.length === 0" class="muted">跟 {{ npc.name }} 打个招呼吧</p>
@@ -285,6 +332,115 @@ function onKeydown(event: KeyboardEvent) {
   transition: width 0.35s ease;
 }
 .lv { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* ---- 选中 NPC 的今日计划（默认只露下一步） ---- */
+.planbox {
+  flex: 0 0 auto;
+  padding: 8px 14px 9px;
+  border-bottom: 1px solid var(--border);
+  background: #14171e;
+}
+.ph { display: flex; align-items: baseline; gap: 8px; }
+.tag { font-size: 11px; color: var(--muted); }
+.cnt {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.toggle {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.toggle:hover { color: var(--text); }
+
+.goal {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8fa6c4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nowstep {
+  margin-top: 5px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+.nowstep time {
+  flex: 0 0 auto;
+  color: #8fb3ff;
+  font-variant-numeric: tabular-nums;
+}
+.nowstep .g {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nowstep .rm,
+.steps .rm {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #8fb3ff;
+  border: 1px solid #2c3b55;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.steps {
+  list-style: none;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: #c9d4e5;
+}
+.steps li time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.steps li .g {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.steps li.done .g { color: #6b7280; text-decoration: line-through; }
+
+.thoughts { margin-top: 7px; }
+.thoughts summary {
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.thoughts summary::-webkit-details-marker { display: none; }
+.thoughts p {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c9d4e5;
+  padding-left: 8px;
+  border-left: 2px solid #2c3b55;
+}
 
 .log {
   flex: 1;

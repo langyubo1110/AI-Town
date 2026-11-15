@@ -3,7 +3,11 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TownScene } from '@/scene/town'
 import type { Npc } from '@/types/api'
 
-const props = defineProps<{ npcs: Npc[] }>()
+const props = defineProps<{
+  npcs: Npc[]
+  /** 选中的 NPC + 他当前那一步（显示在头顶浮标里） */
+  selectedTask?: { id: number; text: string } | null
+}>()
 const emit = defineEmits<{
   select: [npc: Npc | null]
   requestChat: [npc: Npc]
@@ -22,6 +26,10 @@ onMounted(async () => {
   try {
     await scene.mount(host.value)
     scene.setNpcs(props.npcs)
+    scene.setSelectedTask(
+      props.selectedTask?.id ?? null,
+      props.selectedTask?.text ?? null,
+    )
 
     // PixiJS 的 resizeTo 只跟 window resize；布局变化（栅格列数切换、
     // 计划面板加载后把画布撑高）它感知不到，画布会用着旧尺寸把世界画偏。
@@ -42,6 +50,15 @@ onMounted(async () => {
 watch(
   () => props.npcs,
   (next) => scene?.setNpcs(next),
+)
+
+// 选中的人变了 → 把他"现在在干什么"浮在头顶
+watch(
+  () => props.selectedTask,
+  (next) => {
+    scene?.setSelectedTask(next?.id ?? null, next?.text ?? null)
+  },
+  { deep: true },
 )
 
 onBeforeUnmount(() => {
