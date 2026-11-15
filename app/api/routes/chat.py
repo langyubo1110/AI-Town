@@ -27,6 +27,17 @@ def _sse(payload: dict) -> str:
     """一条 SSE 帧。`data: ` 前缀和结尾两个换行都是协议硬要求。"""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
+
+# 工具名 → 给用户看的状态文案。
+# 为什么需要状态帧：工具在主链路上，重试和慢查询都会让首字延后 1~3 秒，
+# 这期间一个字都不吐，界面看起来就像卡死了。
+TOOL_STATUS = {
+    "get_time": "正在看时间…",
+    "get_town_status": "正在看小镇情况…",
+    "search_memories": "正在翻记忆…",
+    "search_docs": "正在查内部知识库…",
+}
+
 @router.post("", response_model=ChatOut, summary="与 NPC 对话")
 #getssion:打开事务
 async def chat(payload: ChatIn, session: AsyncSession = Depends(get_session),redis: Redis = Depends(get_redis),) -> ChatOut:
@@ -89,12 +100,16 @@ async def chat_stream(
     """流式对话。
 
     事件序列（每帧都是 `data: {json}`）：
+        {"type":"status","text":"正在翻记忆…"}     —— 中间状态（可选，可能多条）
         {"type":"delta","text":"前端逐字追加的内容"}
         {"type":"error","message":"..."}          —— 找不到 NPC 时
         {"type":"done", ...ChatOut 的全部字段}    —— 最后一条
 
     为什么元数据放最后：好感度是整轮结束才由 analyze_turn 算出来的，
     流式过程中根本还不存在。前端先渲染文字，收到 done 再补分数和工具标签。
+
+    为什么要有 status 帧：检索和工具调用都在首字之前，这 1~3 秒里一个字都不吐，
+    用户会以为页面卡住了。status 不改延迟，只改"等待时的感受"。
     """
     graph = get_chat_graph()
     thread_id = f"p:{payload.player_name}|n:{payload.npc_name}"
@@ -111,12 +126,28 @@ async def chat_stream(
     }
 
     async def event_stream():
+        # 首字之前要先跑完"并行检索 + 模型思考"，这 1~3 秒先给个状态
+        yield _sse({"type": "status", "text": "正在检索记忆和知识库…"})
         try:
             # astream_events 会把"图里每个节点内部的每次模型调用"都抛出来。
             # 我们只要 agent_step 的 token —— analyze_turn 也在调模型，
             # 不按节点过滤的话，好感度分析的文字会混进回复里。
             async for event in graph.astream_events(inputs, config=config, version="v2"):
-                if event.get("event") != "on_chat_model_stream":
+                kind = event.get("event")
+
+                # 工具开始执行 → 告诉用户"正在查什么"，别让他盯着空白
+                if kind == "on_tool_start":
+                    tool_name = str(event.get("name", ""))
+                    yield _sse(
+                        {
+                            "type": "status",
+                            "text": TOOL_STATUS.get(tool_name, "正在查资料…"),
+                            "tool": tool_name,
+                        }
+                    )
+                    continue
+
+                if kind != "on_chat_model_stream":
                     continue
                 if (event.get("metadata") or {}).get("langgraph_node") != "agent_step":
                     continue

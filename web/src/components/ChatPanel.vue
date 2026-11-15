@@ -48,6 +48,8 @@ const nextStep = computed(() => {
 const histories = ref<Record<number, Turn[]>>({})
 const input = ref('')
 const sending = ref(false)
+/** 流式过程中的中间状态（"正在查内部知识库…"），空串表示没在等 */
+const statusText = ref('')
 const error = ref('')
 const affinity = ref<{ score: number; level: string } | null>(null)
 const scrollBox = ref<HTMLDivElement | null>(null)
@@ -148,7 +150,13 @@ async function send() {
   try {
     // 流式：首字大约 0.8 秒出现，而不是等 3 秒整段蹦出来
     const result = await sendChatStream(outbound, {
+      onStatus: (text) => {
+        // 检索/调工具期间的状态：替代"空白 + 对方正在想…"
+        statusText.value = text
+      },
       onDelta: (chunk) => {
+        // 第一个字到了，状态就可以撤了
+        statusText.value = ''
         appendToLast(npcId, chunk)
         scrollToBottom()
       },
@@ -158,6 +166,7 @@ async function send() {
     // 降级：浏览器不支持流、代理把 SSE 缓冲了、或者连接中途断了 ——
     // 都能退回一次性接口，用户最多多等两秒，功能不受影响
     dropLast(npcId)
+    statusText.value = '正在重新尝试…'
     try {
       settle(await sendChat(outbound))
     } catch (err) {
@@ -169,6 +178,7 @@ async function send() {
     }
   } finally {
     sending.value = false
+    statusText.value = ''
   }
 }
 
@@ -249,7 +259,10 @@ function onKeydown(event: KeyboardEvent) {
         </span>
       </div>
 
-      <p v-if="sending" class="muted">对方正在想…</p>
+      <p v-if="sending" class="muted thinking">
+        <span class="dots"><i /><i /><i /></span>
+        {{ statusText || '对方正在想…' }}
+      </p>
     </div>
 
     <p v-if="error" class="err">{{ error }}</p>
@@ -440,6 +453,32 @@ function onKeydown(event: KeyboardEvent) {
   color: #c9d4e5;
   padding-left: 8px;
   border-left: 2px solid #2c3b55;
+}
+
+/* 等待中的状态行：三个跳动的点让"在等"这件事看起来是活的 */
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.thinking .dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.thinking .dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: think 1.1s infinite ease-in-out;
+}
+.thinking .dots i:nth-child(2) { animation-delay: 0.15s; }
+.thinking .dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes think {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
 }
 
 .log {

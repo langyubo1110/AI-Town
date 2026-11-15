@@ -25,7 +25,11 @@ export function sendChat(payload: ChatIn): Promise<ChatOut> {
  */
 export async function sendChatStream(
   payload: ChatIn,
-  handlers: { onDelta?: (text: string) => void } = {},
+  handlers: {
+    onDelta?: (text: string) => void
+    /** 中间状态：检索/调工具时后端会推一条，用于替代"空白等待" */
+    onStatus?: (text: string) => void
+  } = {},
 ): Promise<ChatOut> {
   const res = await fetch(`${BASE}/api/chat/stream`, {
     method: 'POST',
@@ -59,11 +63,14 @@ export async function sendChatStream(
 
       const event = JSON.parse(line.slice(5).trim()) as
         | { type: 'delta'; text: string }
+        | { type: 'status'; text: string }
         | { type: 'error'; message: string }
         | ({ type: 'done' } & ChatOut)
 
       if (event.type === 'delta') {
         handlers.onDelta?.(event.text)
+      } else if (event.type === 'status') {
+        handlers.onStatus?.(event.text)
       } else if (event.type === 'error') {
         failure = event.message
       } else {

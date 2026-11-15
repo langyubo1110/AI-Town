@@ -495,10 +495,12 @@ query ─┬─ ① 向量召回 top40   （管"意思相近"）
 
 ```
 POST /api/chat/stream      （EventSource 发不了 POST，所以是 fetch + ReadableStream）
-  data: {"type":"delta","text":"常"}     ← 逐字
+  data: {"type":"status","text":"正在检索记忆和知识库…"}   ← 首字之前的中间状态
+  data: {"type":"status","text":"正在看时间…"}             ← 工具开始时
+  data: {"type":"delta","text":"常"}                       ← 逐字
   data: {"type":"delta","text":"规"}
   ...
-  data: {"type":"done", ...ChatOut}       ← 最后一条补元数据
+  data: {"type":"done", ...ChatOut}                        ← 最后一条补元数据
 ```
 
 | 设计点 | 为什么 |
@@ -508,6 +510,14 @@ POST /api/chat/stream      （EventSource 发不了 POST，所以是 fetch + Rea
 | 元数据放**最后一条** | 好感度是整轮结束才由 `analyze_turn` 算出来的，流式过程中还不存在 |
 | nginx 加 `proxy_buffering off` | 默认会攒满 buffer 再发，"流式"退化成"等 3 秒一次性吐完" |
 | 前端失败**自动降级** | 浏览器不支持流 / 代理缓冲 / 连接中断，都退回 `POST /api/chat` |
+| **`status` 帧** | 检索和工具都在首字之前，这 1~4 秒里一个字都不吐，界面看起来就是卡死。status 不改延迟，只改"等待时的感受" |
+
+**实测时间线**（同一台机、同一个 NPC）：
+
+| 问题 | 没有 status 时用户看到空白 | 有 status 后 |
+|---|---|---|
+| 现在几点了（要调 `get_time`） | 0 → 4.26s 空白 | 0.23s「正在检索…」→ 3.49s「正在看时间…」→ 4.26s 出字 |
+| 发布窗口是什么时候（走预取、不调工具） | 0 → 1.26s 空白 | 0.01s「正在检索…」→ 1.26s 出字 |
 
 **实测**（同机同模型）：
 
